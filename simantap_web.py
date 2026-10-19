@@ -120,6 +120,7 @@ class Job:
                 if self.session_id != session_id:
                     await browser.close()
                     return
+                self.browser = browser
                 is_headless = os.environ.get("HEADLESS", "").lower() in ("1", "true", "yes") or (
                     sys.platform != "win32" and not os.environ.get("DISPLAY")
                 )

@@ -24,4 +24,4 @@ RUN mkdir -p /app/hasil_cek && chmod -R 777 /app/hasil_cek
 EXPOSE 8765
 
 # Run the web dashboard
-CMD ["python", "1.py"]
+CMD ["python", "simantap_web.py"]

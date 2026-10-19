@@ -114,8 +114,11 @@ class Job:
         page = None
         try:
             async with async_playwright() as p:
-                self.browser = await core.launch_browser(p)
-                ctx = await self.browser.new_context(no_viewport=True)
+                is_headless = os.environ.get("HEADLESS", "").lower() in ("1", "true", "yes") or (
+                    sys.platform != "win32" and not os.environ.get("DISPLAY")
+                )
+                ctx_opts = {"viewport": {"width": 1920, "height": 1080}} if is_headless else {"no_viewport": True}
+                ctx = await self.browser.new_context(**ctx_opts)
                 page = await ctx.new_page()
                 page.set_default_timeout(20000)
                 page.on("dialog", lambda d: asyncio.create_task(d.accept()))

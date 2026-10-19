@@ -266,18 +266,49 @@ async def login(page, user, pwd):
 async def buka_halaman_nilai(page):
     """Navigasi ke Data Nilai."""
     await tunggu_maintenance(page)
-    if "/akademik/nilai" not in page.url:
-        link = page.locator('a:has-text("Data Nilai"), a[href*="nilai"]').first
-        if not await link.is_visible():
-            menu = page.locator('a:has-text("AKADEMIK"), span:has-text("AKADEMIK")').first
-            await menu.wait_for(state="visible", timeout=15000)
-            await menu.click()
-            await asyncio.sleep(1)
-        await link.wait_for(state="visible", timeout=10000)
-        await link.click()
-        await page.wait_for_load_state("domcontentloaded")
+    if "/akademik/nilai" in page.url:
+        return
+
+    # 1. Buka URL langsung (jauh lebih cepat, stabil, & tidak terpengaruh sidebar/resolusi)
+    try:
+        url_nilai = f"{BASE.rstrip('/')}/akademik/nilai"
+        log(f"Membuka halaman nilai: {url_nilai}")
+        await page.goto(url_nilai, wait_until="domcontentloaded", timeout=20000)
         await asyncio.sleep(2)
         await tunggu_maintenance(page)
+        if "/akademik/nilai" in page.url:
+            return
+    except Exception as e:
+        log(f"      (Navigasi URL langsung: {e}, mencoba via sidebar)")
+
+    # 2. Fallback via sidebar / menu
+    link = page.locator('a:has-text("Data Nilai"), a[href*="nilai"]').first
+    if not await link.is_visible():
+        btn_nav = page.locator('button.navbar-toggler, .sidebar-toggler, [data-toggle="sidebar"], .menu-toggle').first
+        if await btn_nav.is_visible():
+            try:
+                await btn_nav.click()
+                await asyncio.sleep(0.5)
+            except Exception:
+                pass
+        menu = page.locator('a:has-text("AKADEMIK"), span:has-text("AKADEMIK")').first
+        if await menu.count() > 0:
+            try:
+                await menu.wait_for(state="visible", timeout=6000)
+                await menu.click()
+                await asyncio.sleep(1)
+            except Exception:
+                pass
+
+    if await link.count() > 0:
+        try:
+            await link.wait_for(state="visible", timeout=8000)
+            await link.click()
+            await page.wait_for_load_state("domcontentloaded")
+            await asyncio.sleep(2)
+        except Exception:
+            pass
+    await tunggu_maintenance(page)
 
 
 # ----------------------------------------------------------------- dropdown

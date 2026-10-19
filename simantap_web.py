@@ -120,8 +120,11 @@ class Job:
                 if self.session_id != session_id:
                     await browser.close()
                     return
-                self.browser = browser
-                ctx = await browser.new_context(no_viewport=True)
+                is_headless = os.environ.get("HEADLESS", "").lower() in ("1", "true", "yes") or (
+                    sys.platform != "win32" and not os.environ.get("DISPLAY")
+                )
+                ctx_opts = {"viewport": {"width": 1920, "height": 1080}} if is_headless else {"no_viewport": True}
+                ctx = await browser.new_context(**ctx_opts)
                 page = await ctx.new_page()
                 page.set_default_timeout(20000)
                 page.on("dialog", lambda d: asyncio.create_task(d.accept()))

@@ -1,0 +1,40 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Environment variables & credentials
+.env
+.env.local
+.env.*
+
+# Output data & scraping results (nilai & screenshot pribadi)
+hasil_cek/
+*.png
+*.jpg
+*.jpeg
+error.png
+login_error.png
+navigation_error.png
+
+# Playwright artifacts
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+
+# Editor & OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini

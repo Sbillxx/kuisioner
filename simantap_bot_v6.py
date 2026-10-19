@@ -36,9 +36,9 @@ from playwright.async_api import async_playwright, TimeoutError as PWTimeout
 BASE = "https://simantap.unper.ac.id/"
 OUT_DIR = Path("hasil_cek")
 
-# Kredensial default (Isi di sini jika tidak ingin selalu mengetik saat bot dijalankan di terminal)
-DEFAULT_NIM = "2302010036"       # Contoh: "2302010036"
-DEFAULT_PASSWORD = "kth301295"  # Password akun SIMANTAP kamu
+# Kredensial default (kosongkan untuk keamanan; gunakan form di web atau environment variable)
+DEFAULT_NIM = os.environ.get("SIMANTAP_USER", "")
+DEFAULT_PASSWORD = os.environ.get("SIMANTAP_PASS", "")
 
 TEXT_JAWABAN = "baik"  # isi textarea / isian saran kuesioner
 MAX_KUESIONER_PER_SEMESTER = 30
@@ -782,8 +782,10 @@ async def proses_semester(page, opt, args):
 
     OUT_DIR.mkdir(exist_ok=True)
     nama = re.sub(r"[^\w]+", "_", opt["text"]).strip("_")
-    await page.screenshot(path=str(OUT_DIR / f"{nama}.png"), full_page=True)
-    (OUT_DIR / f"{nama}.txt").write_text(teks, encoding="utf-8")
+    prefix = getattr(args, "prefix", None)
+    stem = f"{prefix}_{nama}" if prefix else nama
+    await page.screenshot(path=str(OUT_DIR / f"{stem}.png"), full_page=True)
+    (OUT_DIR / f"{stem}.txt").write_text(teks, encoding="utf-8")
     return status, alasan, info
 
 

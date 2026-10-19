@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """
-SIMANTAP Web - dashboard lokal untuk bot cek nilai/kuesioner.
+SIMANTAP Web - Dashboard Multi-User dengan Sistem Antrean (Maksimal 3 Sesi Aktif).
 
-Pakai:
-  1. Taruh file ini di folder yang SAMA dengan simantap_bot_v6.py (versi yang works).
-  2. python simantap_web.py            (atau: python simantap_web.py path/ke/bot.py)
-  3. Browser terbuka di http://127.0.0.1:8765
-
-Tanpa library tambahan selain playwright. Server hanya aktif di komputer kamu (127.0.0.1);
-NIM dan password hanya dipakai untuk login dan tidak disimpan ke disk.
+Fitur:
+  - Multi-user & multi-session (tiap pengguna terisolasi berdasarkan Session ID).
+  - Pembatasan maksimal 3 browser/bot aktif bersamaan agar aman untuk RAM 512 MB (Render Free Tier).
+  - Sistem antrean otomatis (pengguna ke-4 dst otomatis antre dan mulai saat giliran tiba).
+  - Isolasi tangkapan layar per sesi (reset satu pengguna tidak menghapus tangkapan layar pengguna lain).
+  - Pembersihan otomatis (janitor) untuk sesi idle/ditinggalkan.
+  - Proteksi APP_PASSWORD untuk keamanan akses.
 """
 import asyncio
+import contextvars
 import importlib.util
 import json
 import os
@@ -29,6 +30,8 @@ from urllib.parse import unquote
 
 HERE = Path(__file__).resolve().parent
 PORT = int(os.environ.get("PORT", 8765))
+APP_PASSWORD = os.environ.get("APP_PASSWORD", "").strip()
+MAX_CONCURRENT_JOBS = 3
 
 
 def load_core():
@@ -50,74 +53,162 @@ def load_core():
 
 core = load_core()
 core.OUT_DIR = HERE / "hasil_cek"
+core.OUT_DIR.mkdir(exist_ok=True)
 from playwright.async_api import async_playwright  # noqa: E402
 
+# State sesi & antrean global (thread-safe)
+SESSIONS = {}  # sid -> Job
+QUEUE = []     # list of sid waiting for execution
+QUEUE_LOCK = threading.RLock()
+current_session_var = contextvars.ContextVar("current_session_var", default="")
 
-def clean_output_dir():
-    """Mengosongkan isi folder hasil_cek agar data sesi sebelumnya bersih."""
+
+def clean_session_files(session_id):
+    """Menghapus tangkapan layar dan data khusus untuk session_id ini tanpa mengganggu sesi lain."""
+    if not session_id:
+        return
     try:
         if core.OUT_DIR.exists():
-            for item in core.OUT_DIR.iterdir():
+            for item in core.OUT_DIR.glob(f"{session_id}_*"):
                 try:
                     if item.is_file() or item.is_symlink():
                         item.unlink()
-                    elif item.is_dir():
-                        shutil.rmtree(item, ignore_errors=True)
                 except Exception:
                     pass
-        core.OUT_DIR.mkdir(exist_ok=True)
     except Exception as e:
-        print(f"Catatan clean_output_dir: {e}", flush=True)
+        print(f"Catatan clean_session_files({session_id}): {e}", flush=True)
+
+
+def dispatch_log(msg):
+    sid = current_session_var.get()
+    job = SESSIONS.get(sid)
+    if job:
+        job.log(msg)
+    else:
+        try:
+            print(msg, flush=True)
+        except Exception:
+            pass
+
+
+def web_input(prompt=""):
+    sid = current_session_var.get()
+    job = SESSIONS.get(sid)
+    if not job:
+        return ""
+    job.prompt = str(prompt).strip() or "Selesaikan langkah di jendela Chrome, lalu lanjut."
+    job.ev.clear()
+    job.ev.wait()
+    job.prompt = None
+    return ""
+
+
+core.log = dispatch_log
+core.input = web_input
+
+
+def count_active_jobs():
+    with QUEUE_LOCK:
+        return len([j for j in SESSIONS.values() if j.is_busy()])
+
+
+def drain_queue():
+    with QUEUE_LOCK:
+        active = [j for j in SESSIONS.values() if j.is_busy()]
+        while len(active) < MAX_CONCURRENT_JOBS and QUEUE:
+            next_sid = QUEUE.pop(0)
+            next_job = SESSIONS.get(next_sid)
+            if next_job and next_job.phase == "queued" and next_job.pending_action:
+                action, args = next_job.pending_action
+                next_job.pending_action = None
+                next_job.queue_pos = 0
+                if action == "connect":
+                    nim, pwd = args
+                    next_job.start(nim, pwd)
+                elif action == "run":
+                    indices, isi = args
+                    next_job.execute_run(indices, isi)
+                elif action == "fill_single":
+                    (semester,) = args
+                    next_job.execute_fill_single(semester)
+                active.append(next_job)
+        for pos, sid in enumerate(QUEUE, start=1):
+            if sid in SESSIONS:
+                SESSIONS[sid].queue_pos = pos
 
 
 class Job:
-    def __init__(self):
+    def __init__(self, session_id=None):
         self.ev = threading.Event()
-        self.session_id = uuid.uuid4().hex[:8]
+        self.session_id = session_id or uuid.uuid4().hex[:8]
+        self.queue_pos = 0
+        self.pending_action = None
+        self._nim = ""
+        self._pwd = ""
+        self.last_seen = time.time()
         self.reset(clean_files=False)
+
+    def is_busy(self):
+        return self.phase in ("connecting", "running") or (self.browser is not None and self.phase == "ready")
 
     def reset(self, clean_files=False):
         self.phase, self.message, self.error = "idle", "", None
         self.semesters, self.targets, self.results = [], [], []
         self.done, self.current, self.prompt = 0, None, None
         self.cancelled = False
+        self.queue_pos = 0
+        self.pending_action = None
         self.logs = deque(maxlen=300)
         self.loop = self.q = self.browser = None
         self.ev.clear()
+        self.last_seen = time.time()
         if clean_files:
-            clean_output_dir()
+            clean_session_files(self.session_id)
 
     def log(self, msg):
         self.logs.append(f"{time.strftime('%H:%M:%S')}  {msg}")
         try:
-            print(msg, flush=True)
+            print(f"[{self.session_id}] {msg}", flush=True)
         except Exception:
             pass
 
     def state(self):
-        return dict(session_id=self.session_id, phase=self.phase, message=self.message, error=self.error,
-                    semesters=self.semesters, targets=[t["text"] for t in self.targets],
-                    results=self.results, done=self.done, current=self.current,
-                    prompt=self.prompt, log=list(self.logs)[-120:])
+        return dict(
+            session_id=self.session_id,
+            phase=self.phase,
+            message=self.message,
+            error=self.error,
+            semesters=self.semesters,
+            targets=[t["text"] for t in self.targets],
+            results=self.results,
+            done=self.done,
+            current=self.current,
+            prompt=self.prompt,
+            queue_pos=self.queue_pos,
+            log=list(self.logs)[-120:]
+        )
 
     # ---------------------------------------------------------- worker (thread)
-    def start(self, nim, pwd):
+    def start(self, nim, pwd, pending_cmd=None):
         self.stop()
-        self.session_id = uuid.uuid4().hex[:8]
+        self._nim, self._pwd = nim, pwd
         self.reset(clean_files=True)
-        self.phase, self.message = "connecting", f"Sesi #{self.session_id}: Membuka Chrome dan login..."
+        self.phase, self.message = "connecting", f"Sesi #{self.session_id}: Membuka browser dan login..."
         self.log(f"=== Sesi Baru #{self.session_id} Dimulai ===")
-        self.log("Folder hasil_cek telah dikosongkan untuk sesi ini.")
-        threading.Thread(target=lambda: asyncio.run(self.main(nim, pwd, self.session_id)), daemon=True).start()
+        threading.Thread(
+            target=lambda: asyncio.run(self.main(nim, pwd, self.session_id, pending_cmd)),
+            daemon=True
+        ).start()
 
-    async def main(self, nim, pwd, session_id):
+    async def main(self, nim, pwd, session_id, pending_cmd=None):
+        current_session_var.set(session_id)
         self.loop, self.q = asyncio.get_running_loop(), asyncio.Queue()
         page = None
         browser = None
         try:
             async with async_playwright() as p:
                 browser = await core.launch_browser(p)
-                if self.session_id != session_id:
+                if self.session_id != session_id or self.cancelled:
                     await browser.close()
                     return
                 self.browser = browser
@@ -130,20 +221,24 @@ class Job:
                 page.set_default_timeout(20000)
                 page.on("dialog", lambda d: asyncio.create_task(d.accept()))
                 await core.login(page, nim, pwd)
-                if self.session_id != session_id:
+                if self.session_id != session_id or self.cancelled:
                     return
                 await core.buka_halaman_nilai(page)
-                if self.session_id != session_id:
+                if self.session_id != session_id or self.cancelled:
                     return
                 self.semesters = await core.ambil_semester(page)
                 self.phase, self.message = "ready", "Pilih semester yang mau dicek."
+
+                if pending_cmd:
+                    await self.q.put(pending_cmd)
+
                 while True:
                     cmd = await self.q.get()
-                    if self.session_id != session_id or cmd["type"] == "close":
+                    if self.session_id != session_id or cmd["type"] == "close" or self.cancelled:
                         break
                     elif cmd["type"] == "fill_single":
                         await self.run_fill_single(page, cmd["semester"])
-                    else:
+                    elif cmd["type"] == "run":
                         await self.run_checks(page, cmd)
         except Exception as e:
             if not self.cancelled and self.session_id == session_id:
@@ -152,7 +247,7 @@ class Job:
                 try:
                     core.OUT_DIR.mkdir(exist_ok=True)
                     if page and not page.is_closed():
-                        await page.screenshot(path=str(core.OUT_DIR / "error.png"), full_page=True)
+                        await page.screenshot(path=str(core.OUT_DIR / f"{session_id}_error.png"), full_page=True)
                 except Exception:
                     pass
         finally:
@@ -163,12 +258,35 @@ class Job:
                 pass
             if self.browser is browser:
                 self.browser = None
-            if self.session_id == session_id and self.phase != "error":
+            if self.session_id == session_id and self.phase not in ("error", "done"):
                 self.phase, self.message = "idle", "Sesi ditutup."
+            drain_queue()
+
+    def execute_run(self, indices, isi):
+        self.targets = [self.semesters[i] for i in sorted(indices)]
+        self.results, self.done, self.phase = [], 0, "running"
+        if self.loop and self.q and self.browser:
+            asyncio.run_coroutine_threadsafe(
+                self.q.put({"type": "run", "isi": isi}), self.loop
+            )
+        else:
+            self.start(self._nim, self._pwd, pending_cmd={"type": "run", "isi": isi})
+
+    def execute_fill_single(self, semester):
+        self.phase = "running"
+        if self.loop and self.q and self.browser:
+            asyncio.run_coroutine_threadsafe(
+                self.q.put({"type": "fill_single", "semester": semester}), self.loop
+            )
+        else:
+            self.start(self._nim, self._pwd, pending_cmd={"type": "fill_single", "semester": semester})
 
     async def run_checks(self, page, cmd):
-        args = SimpleNamespace(isi=cmd["isi"], auto=True, semester=None, pilih=False)
+        current_session_var.set(self.session_id)
+        args = SimpleNamespace(isi=cmd["isi"], auto=True, semester=None, pilih=False, prefix=self.session_id)
         for n, opt in enumerate(self.targets, 1):
+            if self.cancelled:
+                return
             self.current = opt["text"]
             self.log(f"[{n}/{len(self.targets)}] {opt['text']}")
             try:
@@ -177,14 +295,29 @@ class Job:
                 if self.cancelled:
                     return
                 status, alasan, info = "GAGAL", [str(e)], {}
-            shot = re.sub(r"[^\w]+", "_", opt["text"]).strip("_") + ".png"
+            clean_name = re.sub(r"[^\w]+", "_", opt["text"]).strip("_")
+            shot = f"{self.session_id}_{clean_name}.png"
             self.results.append(dict(text=opt["text"], status=status, alasan=alasan,
                                      info=info, shot=shot))
             self.done = n
             self.log(f"  -> {status}")
         self.current, self.phase = None, "done"
+        self.log("Pengecekan selesai.")
+
+        # Jika ada pengguna lain menunggu di antrean, tutup browser sesi ini agar memori segera bebas
+        with QUEUE_LOCK:
+            has_waiters = len(QUEUE) > 0
+        if has_waiters and self.browser:
+            self.log("Memberikan giliran pada antrean berikutnya...")
+            try:
+                await self.browser.close()
+            except Exception:
+                pass
+            self.browser = None
+            drain_queue()
 
     async def run_fill_single(self, page, semester_text):
+        current_session_var.set(self.session_id)
         opt = next((s for s in self.semesters if s["text"] == semester_text), None)
         if not opt:
             self.log(f"Semester {semester_text} tidak ditemukan.")
@@ -194,7 +327,7 @@ class Job:
         self.current = opt["text"]
         self.phase = "running"
         self.log(f"=== Mengisi kuesioner untuk {opt['text']} ===")
-        args = SimpleNamespace(isi=True, auto=True, semester=None, pilih=False)
+        args = SimpleNamespace(isi=True, auto=True, semester=None, pilih=False, prefix=self.session_id)
         try:
             status, alasan, info = await core.proses_semester(page, opt, args)
         except Exception as e:
@@ -202,7 +335,8 @@ class Job:
                 return
             status, alasan, info = "GAGAL", [str(e)], {}
 
-        shot = re.sub(r"[^\w]+", "_", opt["text"]).strip("_") + ".png"
+        clean_name = re.sub(r"[^\w]+", "_", opt["text"]).strip("_")
+        shot = f"{self.session_id}_{clean_name}.png"
         updated = False
         for r in self.results:
             if r["text"] == opt["text"]:
@@ -219,36 +353,114 @@ class Job:
         self.current = None
         self.phase = "done"
 
+        with QUEUE_LOCK:
+            has_waiters = len(QUEUE) > 0
+        if has_waiters and self.browser:
+            try:
+                await self.browser.close()
+            except Exception:
+                pass
+            self.browser = None
+            drain_queue()
+
     def stop(self):
         self.cancelled = True
         self.ev.set()
         if self.loop and self.q:
-            asyncio.run_coroutine_threadsafe(self.q.put({"type": "close"}), self.loop)
+            try:
+                asyncio.run_coroutine_threadsafe(self.q.put({"type": "close"}), self.loop)
+            except Exception:
+                pass
         if self.loop and self.browser:
-            asyncio.run_coroutine_threadsafe(self.browser.close(), self.loop)
+            try:
+                asyncio.run_coroutine_threadsafe(self.browser.close(), self.loop)
+            except Exception:
+                pass
+        self.browser = None
+        drain_queue()
 
 
-JOB = Job()
-core.log = JOB.log
+def janitor_loop():
+    """Membersihkan sesi yang ditinggalkan atau idle lama agar RAM dan disk tetap bersih."""
+    while True:
+        try:
+            time.sleep(30)
+            now = time.time()
+            to_remove = []
+            with QUEUE_LOCK:
+                for sid, job in list(SESSIONS.items()):
+                    # Jika selesai dan idle > 2 menit sementara browser masih terbuka, tutup browser
+                    if job.phase == "done" and job.browser is not None and (now - job.last_seen > 120):
+                        try:
+                            job.stop()
+                        except Exception:
+                            pass
+                    # Jika tidak ada aktivitas > 15 menit, hapus sesi
+                    if now - getattr(job, "last_seen", now) > 900:
+                        to_remove.append(sid)
+                for sid in to_remove:
+                    job = SESSIONS.pop(sid, None)
+                    if job:
+                        if sid in QUEUE:
+                            try:
+                                QUEUE.remove(sid)
+                            except ValueError:
+                                pass
+                        try:
+                            job.stop()
+                        except Exception:
+                            pass
+                        clean_session_files(sid)
+                if to_remove:
+                    drain_queue()
+        except Exception as e:
+            print(f"Janitor loop notice: {e}", flush=True)
 
 
-def web_input(prompt=""):
-    """Pengganti input() di bot: minta user lanjut lewat tombol di web."""
-    JOB.prompt = str(prompt).strip() or "Selesaikan langkah di jendela Chrome, lalu lanjut."
-    JOB.ev.clear()
-    JOB.ev.wait()
-    JOB.prompt = None
-    return ""
-
-
-core.input = web_input
+threading.Thread(target=janitor_loop, daemon=True, name="JanitorThread").start()
 
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
-    def reply(self, body, ctype="application/json", code=200):
+    def is_authed(self):
+        if not APP_PASSWORD:
+            return True
+        cookie_header = self.headers.get("Cookie", "")
+        for item in cookie_header.split(";"):
+            part = item.strip()
+            if part.startswith("app_pass="):
+                val = unquote(part.split("=", 1)[1])
+                if val == APP_PASSWORD:
+                    return True
+        auth_hdr = self.headers.get("Authorization", "")
+        if auth_hdr.startswith("Bearer "):
+            if auth_hdr[7:].strip() == APP_PASSWORD:
+                return True
+        return False
+
+    def get_job(self):
+        sid = self.headers.get("X-Session-ID", "").strip()
+        if not sid:
+            cookie_header = self.headers.get("Cookie", "")
+            for item in cookie_header.split(";"):
+                part = item.strip()
+                if part.startswith("sid="):
+                    sid = unquote(part.split("=", 1)[1]).strip()
+                    break
+        with QUEUE_LOCK:
+            if sid and sid in SESSIONS:
+                job = SESSIONS[sid]
+                job.last_seen = time.time()
+                return job
+            if not sid or not re.match(r"^[a-zA-Z0-9_\-]+$", sid):
+                sid = uuid.uuid4().hex[:8]
+            job = Job(sid)
+            SESSIONS[sid] = job
+            return job
+
+    def reply(self, body, ctype="application/json", code=200, session_id=None):
         if isinstance(body, (dict, list)):
             body = json.dumps(body, ensure_ascii=False)
         if isinstance(body, str):
@@ -257,28 +469,60 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype + ("; charset=utf-8" if "text" in ctype or "json" in ctype else ""))
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        if session_id:
+            self.send_header("Set-Cookie", f"sid={session_id}; Path=/; SameSite=Lax; Max-Age=86400")
         self.end_headers()
         self.wfile.write(body)
 
     def do_GET(self):
         path = self.path.split("?")[0]
+        job = self.get_job()
         if path == "/":
-            self.reply(HTML, "text/html")
+            self.reply(HTML, "text/html", session_id=job.session_id)
         elif path == "/api/state":
-            self.reply(JOB.state())
+            authed = self.is_authed()
+            st = job.state()
+            st["auth_required"] = bool(APP_PASSWORD)
+            st["authenticated"] = authed
+            with QUEUE_LOCK:
+                st["active_count"] = count_active_jobs()
+                st["max_active"] = MAX_CONCURRENT_JOBS
+                st["queue_len"] = len(QUEUE)
+            if not authed:
+                st["semesters"] = []
+                st["targets"] = []
+                st["results"] = []
+                st["log"] = []
+            self.reply(st, session_id=job.session_id)
         elif path == "/api/reset":
-            JOB.stop()
-            JOB.session_id = uuid.uuid4().hex[:8]
-            JOB.reset(clean_files=True)
-            self.reply({"ok": True, "session_id": JOB.session_id})
+            if not self.is_authed():
+                return self.reply({"ok": False, "error": "Akses ditolak."}, code=401, session_id=job.session_id)
+            with QUEUE_LOCK:
+                if job.session_id in QUEUE:
+                    try:
+                        QUEUE.remove(job.session_id)
+                    except ValueError:
+                        pass
+                job.stop()
+                clean_session_files(job.session_id)
+                old_sid = job.session_id
+                SESSIONS.pop(old_sid, None)
+                new_sid = uuid.uuid4().hex[:8]
+                new_job = Job(new_sid)
+                SESSIONS[new_sid] = new_job
+                drain_queue()
+            self.reply({"ok": True, "session_id": new_sid}, session_id=new_sid)
         elif path.startswith("/shots/"):
-            f = core.OUT_DIR / Path(unquote(path[7:])).name
+            if not self.is_authed():
+                return self.reply({"error": "Akses ditolak"}, code=401)
+            raw_filename = unquote(path[7:])
+            f = core.OUT_DIR / Path(raw_filename).name
             if f.suffix == ".png" and f.exists():
-                self.reply(f.read_bytes(), "image/png")
+                self.reply(f.read_bytes(), "image/png", session_id=job.session_id)
             else:
-                self.reply({"error": "tidak ada"}, code=404)
+                self.reply({"error": "tidak ada"}, code=404, session_id=job.session_id)
         else:
-            self.reply({"error": "tidak ada"}, code=404)
+            self.reply({"error": "tidak ada"}, code=404, session_id=job.session_id)
 
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
@@ -287,46 +531,128 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             data = {}
         path = self.path
-        if path == "/api/connect" and JOB.phase in ("idle", "error"):
-            nim, pwd = str(data.get("nim", "")).strip().split("@")[0], str(data.get("password", ""))
+        job = self.get_job()
+
+        if path == "/api/auth":
+            pwd = str(data.get("password", "")).strip()
+            if not APP_PASSWORD or pwd == APP_PASSWORD:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Set-Cookie", f"app_pass={APP_PASSWORD}; Path=/; SameSite=Lax; HttpOnly")
+                if job.session_id:
+                    self.send_header("Set-Cookie", f"sid={job.session_id}; Path=/; SameSite=Lax; Max-Age=86400")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(b'{"ok": true}')
+                return
+            return self.reply({"ok": False, "error": "Kata sandi dashboard salah."}, code=401, session_id=job.session_id)
+
+        if not self.is_authed():
+            return self.reply({"ok": False, "error": "Akses ditolak. Masukkan kata sandi dashboard terlebih dahulu."}, code=401, session_id=job.session_id)
+
+        if path == "/api/connect":
+            if job.phase == "running":
+                return self.reply({"ok": False, "error": "Sesi Anda sedang berjalan."}, code=409, session_id=job.session_id)
+            nim = str(data.get("nim", "")).strip().split("@")[0]
+            pwd = str(data.get("password", ""))
             if not nim or not pwd:
-                return self.reply({"ok": False, "error": "NIM dan password wajib diisi."}, code=400)
-            JOB.start(nim, pwd)
-        elif path == "/api/run" and JOB.phase in ("ready", "done"):
-            idx = [i for i in data.get("indices", []) if isinstance(i, int) and 0 <= i < len(JOB.semesters)]
+                return self.reply({"ok": False, "error": "NIM dan password wajib diisi."}, code=400, session_id=job.session_id)
+
+            with QUEUE_LOCK:
+                active_count = count_active_jobs()
+                if active_count < MAX_CONCURRENT_JOBS:
+                    job.start(nim, pwd)
+                    return self.reply({"ok": True, "queued": False}, session_id=job.session_id)
+                else:
+                    job.pending_action = ("connect", (nim, pwd))
+                    job.phase = "queued"
+                    job.message = "Menunggu giliran di antrean..."
+                    if job.session_id not in QUEUE:
+                        QUEUE.append(job.session_id)
+                    job.queue_pos = len(QUEUE)
+                    return self.reply({"ok": True, "queued": True, "queue_pos": job.queue_pos}, session_id=job.session_id)
+
+        elif path == "/api/run":
+            if job.phase == "running":
+                return self.reply({"ok": False, "error": "Pengecekan sedang berjalan."}, code=409, session_id=job.session_id)
+            idx = [i for i in data.get("indices", []) if isinstance(i, int) and 0 <= i < len(job.semesters)]
             if not idx:
-                return self.reply({"ok": False, "error": "Pilih minimal satu semester."}, code=400)
-            JOB.targets = [JOB.semesters[i] for i in sorted(idx)]
-            JOB.results, JOB.done, JOB.phase = [], 0, "running"
-            asyncio.run_coroutine_threadsafe(
-                JOB.q.put({"type": "run", "isi": bool(data.get("isi"))}), JOB.loop)
-        elif path == "/api/continue":
-            JOB.ev.set()
-        elif path == "/api/fill_single" and JOB.phase in ("ready", "done"):
+                return self.reply({"ok": False, "error": "Pilih minimal satu semester."}, code=400, session_id=job.session_id)
+            isi = bool(data.get("isi"))
+
+            with QUEUE_LOCK:
+                if job.browser is not None and job.phase in ("ready", "done"):
+                    job.execute_run(idx, isi)
+                    return self.reply({"ok": True}, session_id=job.session_id)
+                active_count = count_active_jobs()
+                if active_count < MAX_CONCURRENT_JOBS:
+                    job.execute_run(idx, isi)
+                    return self.reply({"ok": True}, session_id=job.session_id)
+                else:
+                    job.pending_action = ("run", (idx, isi))
+                    job.phase = "queued"
+                    job.message = "Menunggu giliran di antrean..."
+                    if job.session_id not in QUEUE:
+                        QUEUE.append(job.session_id)
+                    job.queue_pos = len(QUEUE)
+                    return self.reply({"ok": True, "queued": True, "queue_pos": job.queue_pos}, session_id=job.session_id)
+
+        elif path == "/api/fill_single":
+            if job.phase == "running":
+                return self.reply({"ok": False, "error": "Proses sedang berjalan."}, code=409, session_id=job.session_id)
             sem = str(data.get("semester", "")).strip()
             if not sem:
-                return self.reply({"ok": False, "error": "Nama semester tidak valid."}, code=400)
-            JOB.phase = "running"
-            asyncio.run_coroutine_threadsafe(
-                JOB.q.put({"type": "fill_single", "semester": sem}), JOB.loop
-            )
-            return self.reply({"ok": True})
+                return self.reply({"ok": False, "error": "Nama semester tidak valid."}, code=400, session_id=job.session_id)
+
+            with QUEUE_LOCK:
+                if job.browser is not None and job.phase in ("ready", "done"):
+                    job.execute_fill_single(sem)
+                    return self.reply({"ok": True}, session_id=job.session_id)
+                active_count = count_active_jobs()
+                if active_count < MAX_CONCURRENT_JOBS:
+                    job.execute_fill_single(sem)
+                    return self.reply({"ok": True}, session_id=job.session_id)
+                else:
+                    job.pending_action = ("fill_single", (sem,))
+                    job.phase = "queued"
+                    job.message = "Menunggu giliran di antrean..."
+                    if job.session_id not in QUEUE:
+                        QUEUE.append(job.session_id)
+                    job.queue_pos = len(QUEUE)
+                    return self.reply({"ok": True, "queued": True, "queue_pos": job.queue_pos}, session_id=job.session_id)
+
         elif path == "/api/skip_single":
             sem = str(data.get("semester", "")).strip()
-            for r in JOB.results:
+            for r in job.results:
                 if r["text"] == sem:
                     r["status"] = "DILEWATI"
                     r["alasan"] = ["Kuesioner dilewati oleh pengguna."]
                     break
-            return self.reply({"ok": True})
+            return self.reply({"ok": True}, session_id=job.session_id)
+
+        elif path == "/api/continue":
+            job.ev.set()
+            return self.reply({"ok": True}, session_id=job.session_id)
+
         elif path in ("/api/stop", "/api/reset"):
-            JOB.stop()
-            JOB.session_id = uuid.uuid4().hex[:8]
-            JOB.reset(clean_files=True)
-            return self.reply({"ok": True, "session_id": JOB.session_id})
+            with QUEUE_LOCK:
+                if job.session_id in QUEUE:
+                    try:
+                        QUEUE.remove(job.session_id)
+                    except ValueError:
+                        pass
+                job.stop()
+                clean_session_files(job.session_id)
+                old_sid = job.session_id
+                SESSIONS.pop(old_sid, None)
+                new_sid = uuid.uuid4().hex[:8]
+                new_job = Job(new_sid)
+                SESSIONS[new_sid] = new_job
+                drain_queue()
+            return self.reply({"ok": True, "session_id": new_sid}, session_id=new_sid)
+
         else:
-            return self.reply({"ok": False, "error": "Aksi tidak tersedia saat ini."}, code=409)
-        self.reply({"ok": True})
+            return self.reply({"ok": False, "error": "Aksi tidak tersedia saat ini."}, code=409, session_id=job.session_id)
 
 
 HTML = r"""<!doctype html>
@@ -364,6 +690,7 @@ header{display:flex;align-items:center;justify-content:space-between;min-height:
 .state i{width:8px;height:8px;border-radius:2px;background:var(--warn)}
 .state[data-p=ready] i,.state[data-p=done] i{background:var(--ok)}
 .state[data-p=running] i,.state[data-p=connecting] i{background:var(--accent);animation:p 1s ease-in-out infinite}
+.state[data-p=queued] i{background:var(--pay);animation:p 1s ease-in-out infinite}
 .state[data-p=error] i{background:var(--pay)}
 @keyframes p{50%{opacity:.25}}
 .txt{background:none;border:0;padding:0;cursor:pointer;color:var(--mut);font-size:13px;font-weight:500}
@@ -373,6 +700,7 @@ header{display:flex;align-items:center;justify-content:space-between;min-height:
 .btn:disabled{opacity:.35;cursor:not-allowed;background:var(--ink);border-color:var(--ink);color:var(--bg)}
 .btn.ghost{background:transparent;color:var(--ink);border-color:var(--line)}
 .btn.ghost:hover{border-color:var(--ink);background:transparent;color:var(--ink)}
+
 /* login */
 #vLogin{display:grid;grid-template-columns:1.15fr 1fr;gap:72px;align-items:center;min-height:60vh}
 @media(max-width:820px){#vLogin{grid-template-columns:1fr;gap:32px}}
@@ -391,9 +719,18 @@ h1{font-weight:600;letter-spacing:-.035em;line-height:1.04;margin:0 0 16px;font-
 .form .btn{width:100%}
 .note{font-size:12.5px;color:var(--mut);margin:14px 0 0}
 .err{margin-top:14px;padding:10px 12px;border-left:3px solid var(--pay);background:color-mix(in srgb,var(--pay) 10%,transparent);font-size:13.5px;word-break:break-word}
+
 #vBusy{text-align:center;margin-top:22vh;color:var(--mut)}
 .spin{width:22px;height:22px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:s .8s linear infinite;margin:0 auto 14px}
 @keyframes s{to{transform:rotate(360deg)}}
+
+/* queue view */
+#vQueue{max-width:540px;margin:10vh auto 0;border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:36px 28px;text-align:center}
+.q-box{margin:24px 0;padding:22px 18px;border-radius:10px;background:color-mix(in srgb,var(--accent) 8%,var(--panel));border:1.5px dashed var(--accent)}
+.q-label{font-size:12.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--mut);font-weight:600}
+.q-num{font-size:clamp(32px,5vw,44px);font-weight:700;color:var(--accent);margin:8px 0;letter-spacing:-.02em}
+.q-sub{font-size:13.5px;color:var(--mut)}
+
 /* dashboard */
 #vDash{display:grid;grid-template-columns:268px 1fr;gap:48px;align-items:start}
 @media(max-width:860px){#vDash{grid-template-columns:1fr;gap:28px}}
@@ -481,11 +818,26 @@ dialog .btn{margin-right:8px}
 <header>
   <div class="brand"><i></i>SIMANTAP Checker</div>
   <div class="hd">
+    <span class="mono" id="activePill">0/3 Aktif</span>
     <span class="mono" id="sessPill">Sesi: -</span>
     <span class="state" id="pill" data-p="idle"><i></i><span id="pillT">Belum terhubung</span></span>
     <button class="txt" id="btnReset" title="Kosongkan hasil_cek dan mulai sesi baru">Sesi baru</button>
   </div>
 </header>
+
+<section id="vAuth" hidden>
+  <div>
+    <h1>Dashboard Terproteksi.</h1>
+    <p class="lead">Dashboard ini dikunci dengan kata sandi akses (APP_PASSWORD) agar hasil nilai dan sesi bot Anda tetap aman dan pribadi.</p>
+  </div>
+  <div class="form">
+    <h2>Buka Akses</h2>
+    <label for="appPwd">Kata Sandi Dashboard</label>
+    <input id="appPwd" type="password" placeholder="Masukkan kata sandi">
+    <button class="btn" id="btnAuth">Buka Dashboard</button>
+    <div class="err" id="authErr" hidden></div>
+  </div>
+</section>
 
 <section id="vLogin">
   <div>
@@ -511,6 +863,19 @@ dialog .btn{margin-right:8px}
 </section>
 
 <section id="vBusy" hidden><div class="spin"></div><div id="busyMsg"></div></section>
+
+<section id="vQueue" hidden>
+  <div class="spin"></div>
+  <h2 style="margin:0 0 8px;font-size:22px;font-weight:700">Server Sedang Penuh</h2>
+  <p class="lead" style="font-size:14.5px;margin:0 auto 16px">Maksimal 3 sesi aktif bersamaan agar memori server tetap lancar.</p>
+  <div class="q-box">
+    <div class="q-label">Posisi Antrean Kamu</div>
+    <div class="q-num" id="qPosNum">Urutan ke-1</div>
+    <div class="q-sub" id="qPosSub">3/3 sesi sedang berjalan</div>
+  </div>
+  <p class="note" style="margin-bottom:20px">Pengecekan kamu akan otomatis dimulai begitu salah satu sesi yang aktif selesai. Mohon tetap di halaman ini.</p>
+  <button class="btn ghost" id="btnCancelQueue">Batalkan antrean</button>
+</section>
 
 <section id="vDash" hidden>
   <aside>
@@ -543,10 +908,26 @@ dialog .btn{margin-right:8px}
 
 <script>
 const $=s=>document.querySelector(s);
-const post=(p,b)=>fetch(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b||{})}).then(r=>r.json());
+let currentSid = localStorage.getItem("simantap_sid") || "";
+const post=(p,b)=>fetch(p,{
+  method:"POST",
+  headers:{
+    "Content-Type":"application/json",
+    "X-Session-ID":S.session_id||currentSid
+  },
+  body:JSON.stringify(b||{})
+}).then(r=>r.json());
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const put=(el,h)=>{if(el._h!==h){el.innerHTML=h;el._h=h}};
-const LABEL={idle:"Belum terhubung",connecting:"Menghubungkan",ready:"Siap",running:"Mengecek",done:"Selesai",error:"Perlu perhatian"};
+const LABEL={
+  idle:"Belum terhubung",
+  connecting:"Menghubungkan",
+  queued:"Dalam antrean",
+  ready:"Siap",
+  running:"Mengecek",
+  done:"Selesai",
+  error:"Perlu perhatian"
+};
 let S={session_id:"",phase:"idle",semesters:[],targets:[],results:[],log:[]},sel=null;
 
 function kinds(st){
@@ -561,11 +942,38 @@ const main=r=>kinds(r.status)[0][0];
 const split=t=>{const m=t.match(/(\d{4}\/\d{4})\s*(.*)/);return m?[m[1],m[2]]:[t,""]};
 
 function render(){
+  if(S.auth_required && !S.authenticated){
+    $("#vAuth").hidden=false;
+    $("#vLogin").hidden=true;
+    $("#vBusy").hidden=true;
+    $("#vQueue").hidden=true;
+    $("#vDash").hidden=true;
+    $("#pillT").textContent="Terkunci";
+    $("#pill").dataset.p="error";
+    return;
+  }
+  $("#vAuth").hidden=true;
+
   const p=S.phase,busy=p==="running";
-  $("#pillT").textContent=LABEL[p];$("#pill").dataset.p=p;
+  $("#pillT").textContent=LABEL[p]||p;
+  $("#pill").dataset.p=p;
   $("#sessPill").textContent=S.session_id?`Sesi #${S.session_id}`:"Sesi: -";
+  const ap=$("#activePill");
+  if(ap&&S.active_count!==undefined){
+    ap.textContent=`${S.active_count}/${S.max_active} Aktif`;
+  }
+
+  // Pengaturan tampilan per fase
   $("#vLogin").hidden=!(p==="idle"||p==="error");
-  $("#vBusy").hidden=p!=="connecting";$("#busyMsg").textContent=S.message||"";
+  $("#vBusy").hidden=p!=="connecting";
+  $("#busyMsg").textContent=S.message||"";
+  
+  $("#vQueue").hidden=p!=="queued";
+  if(p==="queued"){
+    $("#qPosNum").textContent=`Urutan ke-${S.queue_pos||1}`;
+    $("#qPosSub").textContent=`${S.active_count||3}/${S.max_active||3} sesi bot sedang aktif`;
+  }
+
   $("#vDash").hidden=!["ready","running","done"].includes(p);
   $("#err").hidden=!S.error;$("#err").textContent=S.error||"";
   if(S.semesters.length&&!sel)sel=new Set(S.semesters.map((_,i)=>i));
@@ -598,17 +1006,59 @@ function render(){
   if(S.prompt){$("#askMsg").textContent=S.prompt;if(!ask.open)ask.showModal()}else if(ask.open)ask.close();
 }
 
+const btnAuth=$("#btnAuth");
+if(btnAuth){
+  btnAuth.onclick=async()=>{
+    const pwd=$("#appPwd").value.trim();
+    if(!pwd)return;
+    const r=await post("/api/auth",{password:pwd});
+    if(r.ok){
+      $("#authErr").hidden=true;
+      tick();
+    }else{
+      $("#authErr").hidden=false;
+      $("#authErr").textContent=r.error||"Kata sandi dashboard salah.";
+    }
+  };
+  $("#appPwd").onkeydown=e=>{if(e.key==="Enter")btnAuth.click()};
+}
+
+const btnCancelQueue=$("#btnCancelQueue");
+if(btnCancelQueue){
+  btnCancelQueue.onclick=async()=>{
+    const r=await post("/api/reset");
+    if(r.ok){
+      localStorage.removeItem("simantap_sid");
+      currentSid="";
+      tick();
+    }
+  };
+}
+
 $("#chips").onclick=e=>{const b=e.target.closest(".chip");if(!b||!sel)return;const i=+b.dataset.i;sel.has(i)?sel.delete(i):sel.add(i);render()};
 $("#all").onclick=()=>{if(!sel)return;sel=sel.size===S.semesters.length?new Set():new Set(S.semesters.map((_,i)=>i));render()};
-$("#go").onclick=async()=>{const r=await post("/api/connect",{nim:$("#nim").value,password:$("#pwd").value});if(!r.ok){S.error=r.error;render()}};
+$("#go").onclick=async()=>{
+  const r=await post("/api/connect",{nim:$("#nim").value,password:$("#pwd").value});
+  if(!r.ok){S.error=r.error;render()}else{tick()}
+};
 $("#run").onclick=async()=>{
   const isi=$("#isi").checked;
-  const r=await post("/api/run",{indices:[...sel],isi});if(!r.ok){S.error=r.error;render()}};
+  const r=await post("/api/run",{indices:[...sel],isi});
+  if(!r.ok){S.error=r.error;render()}else{tick()}
+};
 $("#stop").onclick=async()=>{const r=await post("/api/reset");if(r.ok){sel=null;tick()}};
 $("#btnReset").onclick=async()=>{
   if(S.phase==="running"&&!confirm("Proses cek sedang berjalan. Batalkan dan mulai sesi baru?"))return;
   const r=await post("/api/reset");
-  if(r.ok){sel=null;$("#nim").value="";$("#pwd").value="";tick()}};
+  if(r.ok){
+    sel=null;
+    localStorage.removeItem("simantap_sid");
+    currentSid=r.session_id||"";
+    $("#nim").value="";
+    $("#pwd").value="";
+    tick();
+  }
+};
 $("#askOk").onclick=()=>post("/api/continue");
 $("#askX").onclick=()=>post("/api/stop");
 $("#grid").onclick=async e=>{
@@ -621,12 +1071,22 @@ $("#grid").onclick=async e=>{
 };
 $("#shotX").onclick=()=>$("#shot").close();
 $("#pwd").onkeydown=e=>{if(e.key==="Enter")$("#go").click()};
-async function tick(){try{S=await (await fetch("/api/state")).json();render()}catch(e){}setTimeout(tick,900)}
-tick();
-const nav=performance.getEntriesByType&&performance.getEntriesByType("navigation")[0];
-if(nav&&nav.type==="reload"){
-  fetch("/api/state").then(r=>r.json()).then(st=>{if(st.phase==="done"||st.phase==="error")post("/api/reset")}).catch(()=>{});
+
+async function tick(){
+  try{
+    const res=await fetch("/api/state",{
+      headers:{"X-Session-ID":S.session_id||currentSid}
+    });
+    S=await res.json();
+    if(S.session_id){
+      currentSid=S.session_id;
+      localStorage.setItem("simantap_sid",S.session_id);
+    }
+    render();
+  }catch(e){}
+  setTimeout(tick,900);
 }
+tick();
 </script>
 </body>
 </html>
@@ -638,7 +1098,7 @@ if __name__ == "__main__":
     PORT = int(os.environ.get("PORT", PORT))
     srv = ThreadingHTTPServer((HOST, PORT), Handler)
     display_url = f"http://localhost:{PORT}" if HOST in ("0.0.0.0", "127.0.0.1") else f"http://{HOST}:{PORT}"
-    print(f"SIMANTAP Web berjalan di {display_url}  (Ctrl+C untuk berhenti)")
+    print(f"SIMANTAP Web (Multi-User, Max {MAX_CONCURRENT_JOBS} Aktif) berjalan di {display_url}")
     if sys.platform == "win32" and not os.environ.get("RENDER") and not os.environ.get("DOCKER"):
         threading.Timer(0.8, lambda: webbrowser.open(f"http://127.0.0.1:{PORT}")).start()
     try:

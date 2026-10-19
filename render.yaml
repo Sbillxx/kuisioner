@@ -3,10 +3,12 @@ services:
     name: simantap-checker
     env: docker
     plan: free
-    region: oregon
+    region: singapore
     autoDeploy: true
     envVars:
       - key: HEADLESS
         value: "true"
       - key: PORT
         value: "10000"
+      - key: APP_PASSWORD
+        sync: false

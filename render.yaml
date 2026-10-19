@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: simantap-checker
+    env: docker
+    plan: free
+    region: oregon
+    autoDeploy: true
+    envVars:
+      - key: HEADLESS
+        value: "true"
+      - key: PORT
+        value: "10000"

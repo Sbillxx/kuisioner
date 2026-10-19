@@ -13,6 +13,7 @@ NIM dan password hanya dipakai untuk login dan tidak disimpan ke disk.
 import asyncio
 import importlib.util
 import json
+import os
 import re
 import shutil
 import sys
@@ -27,7 +28,7 @@ from types import SimpleNamespace
 from urllib.parse import unquote
 
 HERE = Path(__file__).resolve().parent
-PORT = 8765
+PORT = int(os.environ.get("PORT", 8765))
 
 
 def load_core():
@@ -629,10 +630,13 @@ if(nav&&nav.type==="reload"){
 
 
 if __name__ == "__main__":
-    srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
-    url = f"http://127.0.0.1:{PORT}"
-    print(f"SIMANTAP Web berjalan di {url}  (Ctrl+C untuk berhenti)")
-    threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+    HOST = os.environ.get("HOST", "0.0.0.0")
+    PORT = int(os.environ.get("PORT", PORT))
+    srv = ThreadingHTTPServer((HOST, PORT), Handler)
+    display_url = f"http://localhost:{PORT}" if HOST in ("0.0.0.0", "127.0.0.1") else f"http://{HOST}:{PORT}"
+    print(f"SIMANTAP Web berjalan di {display_url}  (Ctrl+C untuk berhenti)")
+    if sys.platform == "win32" and not os.environ.get("RENDER") and not os.environ.get("DOCKER"):
+        threading.Timer(0.8, lambda: webbrowser.open(f"http://127.0.0.1:{PORT}")).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

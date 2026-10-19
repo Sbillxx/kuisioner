@@ -214,11 +214,25 @@ async def tunggu_maintenance(page):
 
 # --------------------------------------------------------------------- login
 async def launch_browser(p):
-    log("Membuka Google Chrome...")
-    try:
-        return await p.chromium.launch(channel="chrome", headless=False, args=["--start-maximized"])
-    except Exception:
-        return await p.chromium.launch(headless=False, args=["--start-maximized"])
+    is_headless = os.environ.get("HEADLESS", "").lower() in ("1", "true", "yes") or (
+        sys.platform != "win32" and not os.environ.get("DISPLAY")
+    )
+    args = [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+    ]
+    if not is_headless:
+        args.append("--start-maximized")
+
+    log(f"Membuka browser (headless={is_headless})...")
+    if not is_headless:
+        try:
+            return await p.chromium.launch(channel="chrome", headless=False, args=args)
+        except Exception:
+            pass
+    return await p.chromium.launch(headless=is_headless, args=args)
 
 
 async def login(page, user, pwd):

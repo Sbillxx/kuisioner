@@ -330,129 +330,207 @@ HTML = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SIMANTAP Checker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root{
-  --bg:#edf2ef;--panel:#fbfdfc;--ink:#10231c;--mut:#62746b;--line:#d7e0db;
-  --brand:#006a4e;--brand-ink:#fff;--ok:#0e8f62;--pay:#c8741a;--quiz:#6f52cc;--warn:#76848c;
-  --ok-bg:#dff3ea;--pay-bg:#fbe8d2;--quiz-bg:#e9e3fa;--warn-bg:#e6eaed;
-  --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
-  --sans:"Segoe UI Variable","Segoe UI",Inter,system-ui,-apple-system,sans-serif;
+  --bg:#f4f4f1;--panel:#fbfbf9;--ink:#12151a;--mut:#6b717b;--line:#dcdcd6;--accent:#2d3cf5;
+  --ok:#17795a;--pay:#b86a0b;--quiz:#6a4fd6;--warn:#7a828e;
+  --f:"Inter Tight","Segoe UI Variable","Segoe UI",system-ui,sans-serif;
+  --m:"JetBrains Mono",ui-monospace,Consolas,monospace;
 }
 @media (prefers-color-scheme:dark){:root{
-  --bg:#0c1713;--panel:#13231d;--ink:#e6f1ec;--mut:#8fa49a;--line:#244036;
-  --brand:#2fbf93;--brand-ink:#06251b;--ok:#3ccf9c;--pay:#e6993f;--quiz:#9b83ec;--warn:#93a2ab;
-  --ok-bg:#123a2d;--pay-bg:#3b2a12;--quiz-bg:#2a2250;--warn-bg:#1f2d33;}}
+  --bg:#0d0f13;--panel:#13161b;--ink:#e8eaee;--mut:#8b919c;--line:#242932;--accent:#8591ff;
+  --ok:#3fcf9f;--pay:#f0a043;--quiz:#a893ff;--warn:#97a0ad}}
 *{box-sizing:border-box}
 html{color-scheme:light dark}
-body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 var(--sans)}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 var(--f);font-feature-settings:"ss01","cv11"}
 [hidden]{display:none!important}
 button,input{font:inherit;color:inherit}
-:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
-.wrap{max-width:1080px;margin:0 auto;padding:28px 20px 64px}
-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:28px}
-.brand{display:flex;align-items:center;gap:10px;font-weight:650;letter-spacing:.01em}
-.mark{width:28px;height:28px;border-radius:9px;background:var(--brand);display:grid;place-items:center}
-.mark i{width:10px;height:10px;border:2px solid var(--brand-ink);border-radius:50%;display:block}
-.pill{font-size:13px;padding:4px 12px;border-radius:99px;background:var(--panel);border:1px solid var(--line);color:var(--mut)}
-.pill[data-p=running],.pill[data-p=connecting]{color:var(--brand);border-color:var(--brand)}
-.pill[data-p=error]{color:var(--pay);border-color:var(--pay)}
-main{display:grid;grid-template-columns:320px 1fr;gap:36px;align-items:start}
-@media(max-width:860px){main{grid-template-columns:1fr}}
-aside{position:sticky;top:20px;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:20px}
-@media(max-width:860px){aside{position:static}}
-aside h2{font:600 15px var(--sans);margin:0 0 4px}
-aside p.hint{margin:0 0 16px;color:var(--mut);font-size:13px}
-label.f{display:block;font-size:13px;color:var(--mut);margin:12px 0 5px}
-input[type=text],input[type=password]{width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg)}
-.btn{width:100%;margin-top:16px;padding:11px 14px;border:0;border-radius:10px;background:var(--brand);color:var(--brand-ink);font-weight:600;cursor:pointer}
-.btn:disabled{opacity:.5;cursor:not-allowed}
-.btn.ghost{background:transparent;color:var(--mut);border:1px solid var(--line);margin-top:8px;font-weight:500}
-.err{margin-top:12px;padding:10px 12px;border-radius:10px;background:var(--pay-bg);color:var(--pay);font-size:13px;word-break:break-word}
-.chips{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 4px}
-.chip{border:1px solid var(--line);background:var(--bg);border-radius:8px;padding:5px 9px;font-size:12.5px;cursor:pointer;color:var(--mut)}
-.chip.on{background:var(--brand);border-color:var(--brand);color:var(--brand-ink)}
-.row{display:flex;justify-content:space-between;align-items:center}
-.lnk{background:none;border:0;color:var(--brand);cursor:pointer;padding:0;font-size:13px}
-.chk{display:flex;gap:8px;align-items:flex-start;margin-top:14px;font-size:13px;color:var(--mut)}
-.spin{width:18px;height:18px;border:2px solid var(--line);border-top-color:var(--brand);border-radius:50%;animation:s 1s linear infinite;display:inline-block;vertical-align:-4px;margin-right:8px}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.wrap{max-width:1120px;margin:0 auto;padding:0 24px 72px}
+header{display:flex;align-items:center;justify-content:space-between;min-height:64px;flex-wrap:wrap;gap:8px 16px;padding:10px 0;border-bottom:1px solid var(--line);margin-bottom:40px}
+.brand{white-space:nowrap;font-weight:700;letter-spacing:-.01em;display:flex;align-items:center;gap:10px}
+.brand i{width:14px;height:14px;background:var(--ink);display:block;border-radius:3px;box-shadow:5px 5px 0 -1px var(--accent)}
+.hd{display:flex;align-items:center;flex-wrap:wrap;gap:6px 14px;font-size:13px;color:var(--mut);white-space:nowrap}
+.mono{font-family:var(--m);font-size:12px}
+.state{display:flex;align-items:center;gap:7px;color:var(--ink);font-weight:500}
+.state i{width:8px;height:8px;border-radius:2px;background:var(--warn)}
+.state[data-p=ready] i,.state[data-p=done] i{background:var(--ok)}
+.state[data-p=running] i,.state[data-p=connecting] i{background:var(--accent);animation:p 1s ease-in-out infinite}
+.state[data-p=error] i{background:var(--pay)}
+@keyframes p{50%{opacity:.25}}
+.txt{background:none;border:0;padding:0;cursor:pointer;color:var(--mut);font-size:13px;font-weight:500}
+.txt:hover{color:var(--ink)}
+.btn{border:1px solid var(--ink);border-radius:6px;background:var(--ink);color:var(--bg);font-weight:600;padding:10px 16px;cursor:pointer}
+.btn:hover{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn:disabled{opacity:.35;cursor:not-allowed;background:var(--ink);border-color:var(--ink);color:var(--bg)}
+.btn.ghost{background:transparent;color:var(--ink);border-color:var(--line)}
+.btn.ghost:hover{border-color:var(--ink);background:transparent;color:var(--ink)}
+/* login */
+#vLogin{display:grid;grid-template-columns:1.15fr 1fr;gap:72px;align-items:center;min-height:60vh}
+@media(max-width:820px){#vLogin{grid-template-columns:1fr;gap:32px}}
+h1{font-weight:600;letter-spacing:-.035em;line-height:1.04;margin:0 0 16px;font-size:clamp(36px,5.4vw,60px)}
+.lead{color:var(--mut);max-width:46ch;margin:0 0 28px;font-size:16px}
+.key{list-style:none;margin:0;padding:0;display:grid;gap:10px;font-size:14px}
+.key li{display:flex;gap:10px;align-items:baseline}
+.sq{width:9px;height:9px;border-radius:2px;display:inline-block;flex:none;background:var(--warn)}
+.sq.ok{background:var(--ok)}.sq.pay{background:var(--pay)}.sq.quiz{background:var(--quiz)}
+.key b{font-weight:600;min-width:88px;display:inline-block}.key span{color:var(--mut)}
+.form{border:1px solid var(--line);border-radius:10px;background:var(--panel);padding:26px}
+.form h2{margin:0 0 20px;font-size:17px;font-weight:600;letter-spacing:-.01em}
+.form label{display:block;font-size:13px;font-weight:500;color:var(--mut);margin:0 0 6px}
+.form input{width:100%;padding:11px 12px;border-radius:6px;border:1px solid var(--line);background:var(--bg);margin-bottom:16px}
+.form input:focus{border-color:var(--accent);outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent)}
+.form .btn{width:100%}
+.note{font-size:12.5px;color:var(--mut);margin:14px 0 0}
+.err{margin-top:14px;padding:10px 12px;border-left:3px solid var(--pay);background:color-mix(in srgb,var(--pay) 10%,transparent);font-size:13.5px;word-break:break-word}
+#vBusy{text-align:center;margin-top:22vh;color:var(--mut)}
+.spin{width:22px;height:22px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:s .8s linear infinite;margin:0 auto 14px}
 @keyframes s{to{transform:rotate(360deg)}}
-.btn-act{display:inline-flex;align-items:center;gap:6px;padding:6px 13px;border-radius:8px;font-size:12.5px;font-weight:600;cursor:pointer;border:1px solid transparent;transition:all .15s}
-.btn-act.fill{background:var(--brand);color:var(--brand-ink)}
-.btn-act.fill:hover{filter:brightness(1.08)}
-.btn-act.skip{background:transparent;border-color:var(--line);color:var(--mut)}
-.btn-act.skip:hover{background:var(--bg);color:var(--ink)}
-.btn-act:disabled{opacity:.5;cursor:not-allowed}
-h1{font:500 clamp(28px,4vw,40px)/1.15 var(--serif);margin:0 0 8px;letter-spacing:-.01em}
-.sub{color:var(--mut);margin:0 0 22px;max-width:56ch}
-.bar{height:6px;background:var(--line);border-radius:9px;overflow:hidden;margin:0 0 26px}
-.bar b{display:block;height:100%;background:var(--brand);width:0;transition:width .4s}
-.rail{list-style:none;margin:0;padding:0;position:relative}
-.rail:before{content:"";position:absolute;left:11px;top:8px;bottom:8px;width:2px;background:var(--line)}
-.node{position:relative;padding:0 0 22px 40px}
-.dot{position:absolute;left:3px;top:4px;width:18px;height:18px;border-radius:50%;background:var(--bg);border:2px solid var(--line)}
-.node.k-ok .dot{background:var(--ok);border-color:var(--ok)}
-.node.k-pay .dot{background:var(--pay);border-color:var(--pay)}
-.node.k-quiz .dot{background:var(--quiz);border-color:var(--quiz)}
-.node.k-warn .dot{background:var(--warn);border-color:var(--warn)}
-.node.now .dot{border-color:var(--brand);box-shadow:0 0 0 5px color-mix(in srgb,var(--brand) 22%,transparent)}
-.node h3{font:500 19px/1.3 var(--serif);margin:0}
-.head{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center}
-.b{font-size:12.5px;padding:2px 9px;border-radius:99px;font-weight:600}
-.b.ok{background:var(--ok-bg);color:var(--ok)}.b.pay{background:var(--pay-bg);color:var(--pay)}
-.b.quiz{background:var(--quiz-bg);color:var(--quiz)}.b.warn{background:var(--warn-bg);color:var(--warn)}
-.meta{display:flex;gap:16px;color:var(--mut);font-size:13.5px;margin-top:3px}
-.why{margin:8px 0 0;padding:10px 12px;background:var(--panel);border:1px solid var(--line);border-radius:10px;font-size:13.5px;list-style:none;max-width:62ch}
-.why li+li{margin-top:4px}
-.pending{color:var(--mut);font-size:13.5px;margin-top:2px}
-details{margin-top:10px}
+/* dashboard */
+#vDash{display:grid;grid-template-columns:268px 1fr;gap:48px;align-items:start}
+@media(max-width:860px){#vDash{grid-template-columns:1fr;gap:28px}}
+#vDash>*{min-width:0}
+@media(min-width:861px){aside{position:sticky;top:20px}}
+.go{display:block}
+aside h2{font-size:13px;font-weight:600;margin:0 0 12px;color:var(--mut)}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{border:1px solid var(--line);background:transparent;border-radius:6px;padding:5px 10px;font-size:13px;font-weight:500;cursor:pointer;color:var(--mut);font-variant-numeric:tabular-nums}
+.chip:hover{border-color:var(--ink);color:var(--ink)}
+.chip.on{background:var(--ink);border-color:var(--ink);color:var(--bg)}
+.sel{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.chk{display:flex;gap:9px;align-items:center;font-size:13.5px;margin:20px 0 18px;cursor:pointer}
+aside .btn{width:100%}
+aside .txt{margin-top:14px;display:block}
+.sum h1{font-size:clamp(28px,3.6vw,40px);margin:0 0 6px}
+.sum p{margin:0 0 20px;color:var(--mut)}
+.seg{display:flex;gap:3px;margin-bottom:12px}
+.seg i{flex:1;height:6px;border-radius:2px;background:var(--line);display:block}
+.seg i.ok{background:var(--ok)}.seg i.pay{background:var(--pay)}.seg i.quiz{background:var(--quiz)}.seg i.warn{background:var(--warn)}
+.seg i.now{background:var(--accent);animation:p 1s ease-in-out infinite}
+.cnt{display:flex;flex-wrap:wrap;gap:6px 22px;font-size:13.5px;margin-bottom:30px}
+.cnt span{display:flex;align-items:center;gap:7px}
+.cnt b{font-variant-numeric:tabular-nums;font-weight:600}
+.ledger{border-top:1px solid var(--ink)}
+.row{display:grid;grid-template-columns:minmax(150px,1.3fr) minmax(130px,1fr) 52px 52px 52px 132px;gap:0 14px;align-items:center;padding:15px 6px;border-bottom:1px solid var(--line)}
+.row.th{padding:9px 6px;font-size:12.5px;color:var(--mut);font-weight:500}
+.row:not(.th):hover{background:color-mix(in srgb,var(--ink) 3.5%,transparent)}
+.nm b{display:block;font-weight:600;letter-spacing:-.01em;font-size:16px;font-variant-numeric:tabular-nums}
+.nm span{color:var(--mut);font-size:13px}
+.st{display:flex;align-items:center;gap:9px;font-weight:500;font-size:14px}
+.st.pend{color:var(--mut);font-weight:400}
+.n{font-family:var(--m);font-size:13px;text-align:right;font-variant-numeric:tabular-nums}
+.ac{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap}
+.todo{grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.sm{border:1px solid var(--line);background:transparent;border-radius:6px;padding:4px 10px;font-size:12.5px;font-weight:500;cursor:pointer}
+.sm:hover{border-color:var(--ink)}
+.sm.p{background:var(--ink);border-color:var(--ink);color:var(--bg)}
+.sm.p:hover{background:var(--accent);border-color:var(--accent);color:#fff}
+.sm:disabled{opacity:.35;cursor:not-allowed}
+.why{grid-column:1/-1;margin:12px 0 0;padding:2px 0 2px 14px;border-left:2px solid var(--warn);font-size:13.5px;color:var(--mut);max-width:70ch}
+.why p{margin:0}.why p+p{margin-top:3px}
+.k-pay .why{border-color:var(--pay)}.k-quiz .why{border-color:var(--quiz)}.k-ok .why{border-color:var(--ok)}
+details{margin-top:28px}
 summary{cursor:pointer;color:var(--mut);font-size:13px}
-pre{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;max-height:240px;overflow:auto;font:12px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap;color:var(--mut)}
-dialog{border:1px solid var(--line);border-radius:16px;background:var(--panel);color:var(--ink);padding:22px;max-width:min(92vw,960px)}
-dialog::backdrop{background:rgba(6,20,15,.55)}
-dialog img{max-width:100%;border-radius:8px;display:block;margin-bottom:12px}
+pre{border:1px solid var(--line);border-radius:6px;background:var(--panel);padding:12px;max-height:240px;overflow:auto;font:12px/1.55 var(--m);white-space:pre-wrap;color:var(--mut)}
+dialog{border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink);padding:22px;max-width:min(92vw,960px)}
+dialog::backdrop{background:rgba(8,10,14,.6)}
+dialog img{max-width:100%;border-radius:6px;display:block;margin-bottom:14px;border:1px solid var(--line)}
+dialog .btn{margin-right:8px}
+.mt{display:contents}
+.n small{display:none}
+.ac:empty{display:none}
+@media(max-width:860px){
+  .wrap{padding:0 16px 56px}
+  header{margin-bottom:24px}
+  #vDash{gap:22px}
+  .chips{flex-wrap:nowrap;overflow-x:auto;margin:0 -16px;padding:0 16px 6px;scrollbar-width:none}
+  .chips::-webkit-scrollbar{display:none}
+  .chip{flex:none;padding:8px 12px}
+  .go{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:14px}
+  .chk{margin:0}
+  aside .btn{width:auto;padding:11px 26px}
+  aside .txt{display:inline-block;margin-top:10px}
+}
+@media(max-width:760px){
+  .row{grid-template-columns:1fr auto;grid-template-areas:"nm st" "mt mt" "ac ac" "why why" "todo todo";gap:10px 12px;padding:16px 2px}
+  .row.th{display:none}
+  .nm{grid-area:nm}
+  .st{grid-area:st;align-self:start}
+  .mt{display:flex;grid-area:mt;gap:22px}
+  .n{text-align:left}
+  .n small{display:inline;font-family:var(--f);color:var(--mut);margin-right:6px;font-size:12.5px}
+  .ac{grid-area:ac;justify-content:flex-start}
+  .sm{padding:8px 12px}
+  .why{grid-area:why;margin-top:2px}
+  .todo{grid-area:todo;margin-top:2px}
+  #vLogin{min-height:0}
+}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 </head>
 <body>
 <div class="wrap">
 <header>
-  <div class="brand"><span class="mark"><i></i></span>SIMANTAP Checker</div>
-  <div style="display:flex;align-items:center;gap:10px">
-    <span class="pill" id="sessPill" style="font-family:monospace;font-size:12px">Sesi: -</span>
-    <span class="pill" id="pill" data-p="idle">Belum terhubung</span>
-    <button class="lnk" id="btnReset" title="Kosongkan hasil_cek dan mulai sesi baru" style="font-size:12.5px;padding:4px 10px;border:1px solid var(--line);border-radius:99px;background:var(--panel);color:var(--mut);cursor:pointer;display:inline-flex;align-items:center;gap:4px">🔄 Sesi Baru</button>
+  <div class="brand"><i></i>SIMANTAP Checker</div>
+  <div class="hd">
+    <span class="mono" id="sessPill">Sesi: -</span>
+    <span class="state" id="pill" data-p="idle"><i></i><span id="pillT">Belum terhubung</span></span>
+    <button class="txt" id="btnReset" title="Kosongkan hasil_cek dan mulai sesi baru">Sesi baru</button>
   </div>
 </header>
-<main>
-<aside>
-  <section id="login">
+
+<section id="vLogin">
+  <div>
+    <h1>Status akademik, per semester.</h1>
+    <p class="lead">Bot membuka SIMANTAP di Chrome kamu, memeriksa setiap Tahun Akademik, lalu melaporkan hasilnya di sini.</p>
+    <ul class="key">
+      <li><i class="sq ok"></i><b>Aman</b><span>Kartu hasil studi dan nilai bisa dibuka.</span></li>
+      <li><i class="sq pay"></i><b>Belum bayar</b><span>Nilai terkunci karena tunggakan.</span></li>
+      <li><i class="sq quiz"></i><b>Kuesioner</b><span>Ada kuesioner yang belum diisi.</span></li>
+      <li><i class="sq"></i><b>Perlu dicek</b><span>Tampilan lain atau gagal dibaca.</span></li>
+    </ul>
+  </div>
+  <div class="form">
     <h2>Masuk ke SIMANTAP</h2>
-    <p class="hint">Chrome akan terbuka di komputer kamu. Data login tidak disimpan.</p>
-    <label class="f" for="nim">NIM</label>
+    <label for="nim">NIM</label>
     <input id="nim" type="text" autocomplete="username" placeholder="2303010252">
-    <label class="f" for="pwd">Password</label>
+    <label for="pwd">Password</label>
     <input id="pwd" type="password" autocomplete="current-password">
     <button class="btn" id="go">Masuk dan ambil semester</button>
     <div class="err" id="err" hidden></div>
-  </section>
-  <section id="busy" hidden><span class="spin"></span><span id="busyMsg"></span></section>
-  <section id="work" hidden>
-    <div class="row"><h2>Semester</h2><button class="lnk" id="all">Pilih semua</button></div>
-    <div class="chips" id="chips"></div>
-    <label class="chk"><input type="checkbox" id="isi" checked>
-      <span>Isi kuesioner otomatis (pilih opsi 3 "Baik", saran "baik", lalu simpan).</span></label>
-    <button class="btn" id="run">Mulai cek</button>
-    <button class="btn ghost" id="stop">Tutup sesi</button>
-  </section>
-</aside>
-<section>
-  <h1 id="title">Cek status nilai per semester</h1>
-  <p class="sub" id="sub">Masuk dulu, lalu pilih semester. Hasilnya muncul berurutan di sini, lengkap dengan alasan kalau nilai belum bisa dilihat.</p>
-  <div class="bar" id="barWrap" hidden><b id="bar"></b></div>
-  <ol class="rail" id="rail"></ol>
-  <details id="logWrap" hidden><summary>Log proses</summary><pre id="log"></pre></details>
+    <p class="note">Data login hanya dipakai di komputer kamu dan tidak disimpan.</p>
+  </div>
 </section>
-</main>
+
+<section id="vBusy" hidden><div class="spin"></div><div id="busyMsg"></div></section>
+
+<section id="vDash" hidden>
+  <aside>
+    <div class="sel"><h2 style="margin:0">Semester</h2><button class="txt" id="all">Pilih semua</button></div>
+    <div class="chips" id="chips"></div>
+    <div class="go"><label class="chk" title="Pilih opsi 3 Baik, saran baik, lalu simpan"><input type="checkbox" id="isi" checked>Isi kuesioner otomatis</label>
+    <button class="btn" id="run">Mulai cek</button></div>
+    <button class="txt" id="stop">Tutup sesi</button>
+  </aside>
+  <div>
+    <div class="sum">
+      <h1 id="title">Pilih semester</h1>
+      <p id="sub">Pilih semester yang mau dicek, lalu mulai.</p>
+      <div class="seg" id="seg"></div>
+      <div class="cnt">
+        <span><i class="sq ok"></i><b id="cOk">0</b> aman</span>
+        <span><i class="sq pay"></i><b id="cPay">0</b> belum bayar</span>
+        <span><i class="sq quiz"></i><b id="cQuiz">0</b> kuesioner</span>
+        <span><i class="sq"></i><b id="cWarn">0</b> perlu dicek</span>
+      </div>
+    </div>
+    <div class="ledger" id="grid"></div>
+    <details id="logWrap" hidden><summary>Log proses</summary><pre id="log"></pre></details>
+  </div>
+</section>
 </div>
 
 <dialog id="shot"><img id="shotImg" alt="Tangkapan layar halaman nilai"><button class="btn ghost" id="shotX">Tutup</button></dialog>
@@ -466,20 +544,6 @@ const put=(el,h)=>{if(el._h!==h){el.innerHTML=h;el._h=h}};
 const LABEL={idle:"Belum terhubung",connecting:"Menghubungkan",ready:"Siap",running:"Mengecek",done:"Selesai",error:"Perlu perhatian"};
 let S={session_id:"",phase:"idle",semesters:[],targets:[],results:[],log:[]},sel=null;
 
-// Deteksi jika halaman baru saja di-refresh (reload)
-const perfEntries = performance.getEntriesByType && performance.getEntriesByType("navigation");
-const isReload = (perfEntries && perfEntries[0] && perfEntries[0].type === "reload") || (performance.navigation && performance.navigation.type === 1);
-
-// Bila user me-refresh halaman saat sesi sudah selesai (done) atau error/idle,
-// otomatis reset sesi agar folder hasil_cek dikosongkan dan hasil lama di web langsung hilang
-if(isReload){
-  fetch("/api/state").then(r=>r.json()).then(st=>{
-    if(st.phase === "done" || st.phase === "error"){
-      post("/api/reset").then(res=>{ if(res && res.ok) tick(); });
-    }
-  }).catch(()=>{});
-}
-
 function kinds(st){
   if(st==="OK")return[["ok","Aman"]];
   if(st==="DILEWATI")return[["warn","Dilewati"]];
@@ -489,51 +553,42 @@ function kinds(st){
   return k.length?k:[["warn",st==="GAGAL"?"Gagal dicek":"Perlu dicek"]];
 }
 const main=r=>kinds(r.status)[0][0];
+const split=t=>{const m=t.match(/(\d{4}\/\d{4})\s*(.*)/);return m?[m[1],m[2]]:[t,""]};
 
 function render(){
-  const p=S.phase,pill=$("#pill");
-  pill.textContent=LABEL[p];pill.dataset.p=p;
-  if($("#sessPill")){
-    $("#sessPill").textContent = S.session_id ? `ID Sesi: #${S.session_id}` : "Sesi: -";
-  }
-  $("#login").hidden=!(p==="idle"||p==="error");
-  $("#busy").hidden=p!=="connecting";$("#busyMsg").textContent=S.message||"";
-  $("#work").hidden=!["ready","running","done"].includes(p);
+  const p=S.phase,busy=p==="running";
+  $("#pillT").textContent=LABEL[p];$("#pill").dataset.p=p;
+  $("#sessPill").textContent=S.session_id?`Sesi #${S.session_id}`:"Sesi: -";
+  $("#vLogin").hidden=!(p==="idle"||p==="error");
+  $("#vBusy").hidden=p!=="connecting";$("#busyMsg").textContent=S.message||"";
+  $("#vDash").hidden=!["ready","running","done"].includes(p);
   $("#err").hidden=!S.error;$("#err").textContent=S.error||"";
   if(S.semesters.length&&!sel)sel=new Set(S.semesters.map((_,i)=>i));
   if(!S.semesters.length)sel=null;
-  put($("#chips"),S.semesters.map((s,i)=>`<button class="chip ${sel&&sel.has(i)?"on":""}" data-i="${i}">${esc(s.text.replace(/^TA\s+/,"").replace("Semester ",""))}</button>`).join(""));
-  const busy=p==="running";
-  $("#run").disabled=busy||!sel||!sel.size;$("#run").textContent=busy?"Sedang mengecek...":(p==="done"?"Cek lagi":"Mulai cek");
+  put($("#chips"),S.semesters.map((s,i)=>{const [a,b]=split(s.text);return `<button class="chip ${sel&&sel.has(i)?"on":""}" data-i="${i}">${esc(a)} ${esc(b.replace("Semester ",""))}</button>`}).join(""));
+  $("#run").disabled=busy||!sel||!sel.size;$("#run").textContent=busy?"Mengecek...":(p==="done"?"Cek lagi":"Mulai cek");
 
-  // judul
-  const R=S.results,n=S.targets.length;
-  if(R.length){
-    const c={ok:0,pay:0,quiz:0,warn:0};R.forEach(r=>c[main(r)]++);
-    const t=[];
-    if(c.ok)t.push(`${c.ok} aman`);if(c.pay)t.push(`${c.pay} belum bayar`);
-    if(c.quiz)t.push(`${c.quiz} menunggu kuesioner`);if(c.warn)t.push(`${c.warn} perlu dicek`);
-    $("#title").textContent=(p==="running"?"Sementara: ":"")+t.join(", ");
-    $("#sub").textContent=p==="running"?`Sudah ${S.done} dari ${n} semester.`:`${n} semester selesai dicek.`;
-  }else if(p==="running"){$("#title").textContent="Mengecek semester...";$("#sub").textContent=S.current||""}
-  $("#barWrap").hidden=!n;$("#bar").style.width=n?(S.done/n*100)+"%":"0";
+  const R=S.results,n=S.targets.length,c={ok:0,pay:0,quiz:0,warn:0};
+  R.forEach(r=>c[main(r)]++);
+  $("#cOk").textContent=c.ok;$("#cPay").textContent=c.pay;$("#cQuiz").textContent=c.quiz;$("#cWarn").textContent=c.warn;
+  $("#title").textContent=busy?"Sedang mengecek":(R.length?`${c.ok} dari ${R.length} semester aman`:"Pilih semester");
+  $("#sub").textContent=busy?(S.current||""):(R.length?(c.pay?`${c.pay} semester terkunci karena pembayaran.`:"Semua hasil sudah masuk."):"Pilih semester yang mau dicek, lalu mulai.");
+  put($("#seg"),S.targets.map(t=>{const r=R.find(x=>x.text===t);return `<i class="${r?main(r):(t===S.current?"now":"")}" title="${esc(t)}"></i>`}).join(""));
 
-  // rail
-  put($("#rail"),S.targets.map((t,i)=>{
-    const r=R.find(x=>x.text===t)||R[i];
-    if(!r)return `<li class="node ${t===S.current?"now":""}"><span class="dot"></span><h3>${esc(t)}</h3><div class="pending">${t===S.current?"Sedang dicek...":"Menunggu giliran"}</div></li>`;
-    const b=kinds(r.status).map(([k,l])=>`<span class="b ${k}">${l}</span>`).join("");
-    const m=[r.info.semester&&`Semester ${r.info.semester}`,r.info.ip&&`IP ${r.info.ip}`,r.info.ipk&&`IPK ${r.info.ipk}`].filter(Boolean).map(x=>`<span>${esc(x)}</span>`).join("");
-    const why=r.alasan.length?`<ul class="why">${r.alasan.map(a=>`<li>${esc(a)}</li>`).join("")}</ul>`:"";
-    const canAct=/KUESIONER/.test(r.status);
-    const actBtns=canAct?`<div style="display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap"><button class="btn-act fill" data-act="fill" data-sem="${esc(r.text)}" ${busy?"disabled":""}>✍️ Lanjut Isi Kuesioner</button><button class="btn-act skip" data-act="skip" data-sem="${esc(r.text)}" ${busy?"disabled":""}>⏩ Lewati (Skip)</button></div>`:"";
-    return `<li class="node k-${main(r)}"><span class="dot"></span><div class="head"><h3>${esc(r.text)}</h3>${b}</div>${m?`<div class="meta">${m}</div>`:""}${why}${actBtns}<button class="lnk" data-shot="${esc(r.shot)}" style="margin-top:8px">Lihat tangkapan layar</button></li>`;
+  const head=n?`<div class="row th"><div>Tahun akademik</div><div>Status</div><div class="n">Smt</div><div class="n">IP</div><div class="n">IPK</div><div></div></div>`:"";
+  put($("#grid"),head+S.targets.map((t,i)=>{
+    const r=R.find(x=>x.text===t)||R[i],[a,b]=split(t);
+    const nm=`<div class="nm"><b>${esc(a)}</b><span>${esc(b)}</span></div>`;
+    if(!r)return `<div class="row">${nm}<div class="st pend"><i class="sq ${t===S.current?"":""}" style="${t===S.current?"background:var(--accent)":"background:var(--line)"}"></i>${t===S.current?"Sedang dicek":"Menunggu"}</div><div class="mt"><div class="n"><small>Smt</small>-</div><div class="n"><small>IP</small>-</div><div class="n"><small>IPK</small>-</div></div><div class="ac"></div></div>`;
+    const k=main(r),lab=kinds(r.status).map(x=>x[1]).join(" + "),I=r.info||{};
+    const why=(r.alasan||[]).length?`<div class="why">${r.alasan.map(x=>`<p>${esc(x)}</p>`).join("")}</div>`:"";
+    const act=/KUESIONER/.test(r.status)?`<button class="sm p" data-act="fill" data-sem="${esc(r.text)}" ${busy?"disabled":""}>Isi kuesioner</button><button class="sm" data-act="skip" data-sem="${esc(r.text)}" ${busy?"disabled":""}>Lewati</button>`:"";
+    return `<div class="row k-${k}">${nm}<div class="st"><i class="sq ${k}"></i>${esc(lab)}</div><div class="mt"><div class="n"><small>Smt</small>${esc(I.semester||"-")}</div><div class="n"><small>IP</small>${esc(I.ip||"-")}</div><div class="n"><small>IPK</small>${esc(I.ipk||"-")}</div></div><div class="ac"><button class="sm" data-shot="${esc(r.shot)}">Tangkapan layar</button></div>${why}${act?`<div class="todo">${act}</div>`:""}</div>`;
   }).join(""));
 
   $("#logWrap").hidden=!S.log.length;
   const pre=$("#log");pre.textContent=S.log.join("\n");
   if($("#logWrap").open)pre.scrollTop=pre.scrollHeight;
-
   const ask=$("#ask");
   if(S.prompt){$("#askMsg").textContent=S.prompt;if(!ask.open)ask.showModal()}else if(ask.open)ask.close();
 }
@@ -544,44 +599,29 @@ $("#go").onclick=async()=>{const r=await post("/api/connect",{nim:$("#nim").valu
 $("#run").onclick=async()=>{
   const isi=$("#isi").checked;
   const r=await post("/api/run",{indices:[...sel],isi});if(!r.ok){S.error=r.error;render()}};
+$("#stop").onclick=async()=>{const r=await post("/api/reset");if(r.ok){sel=null;tick()}};
 $("#btnReset").onclick=async()=>{
-  if(S.phase==="running"&&!confirm("Proses cek sedang berjalan. Yakin ingin membatalkan dan mulai sesi baru?"))return;
+  if(S.phase==="running"&&!confirm("Proses cek sedang berjalan. Batalkan dan mulai sesi baru?"))return;
   const r=await post("/api/reset");
-  if(r.ok){sel=null;$("#nim").value="";$("#pwd").value="";tick()}
-};
-$("#stop").onclick=async()=>{const r=await post("/api/reset");if(r.ok)tick()};
+  if(r.ok){sel=null;$("#nim").value="";$("#pwd").value="";tick()}};
 $("#askOk").onclick=()=>post("/api/continue");
 $("#askX").onclick=()=>post("/api/stop");
-$("#rail").onclick=async e=>{
+$("#grid").onclick=async e=>{
   const b=e.target.closest("[data-shot]");
-  if(b){
-    $("#shotImg").src="/shots/"+encodeURIComponent(b.dataset.shot)+"?t="+Date.now();
-    $("#shot").showModal();
-    return;
-  }
+  if(b){$("#shotImg").src="/shots/"+encodeURIComponent(b.dataset.shot)+"?t="+Date.now();$("#shot").showModal();return}
   const f=e.target.closest('[data-act="fill"]');
-  if(f){
-    const sem=f.dataset.sem;
-    if(confirm(`Yakin ingin otomatis mengisi seluruh kuesioner untuk ${sem}?`)){
-      f.disabled=true;
-      await post("/api/fill_single",{semester:sem});
-      tick();
-    }
-    return;
-  }
-  const s=e.target.closest('[data-act="skip"]');
-  if(s){
-    const sem=s.dataset.sem;
-    await post("/api/skip_single",{semester:sem});
-    tick();
-    return;
-  }
+  if(f){if(confirm(`Isi semua kuesioner untuk ${f.dataset.sem}?`)){f.disabled=true;await post("/api/fill_single",{semester:f.dataset.sem});tick()}return}
+  const k=e.target.closest('[data-act="skip"]');
+  if(k){await post("/api/skip_single",{semester:k.dataset.sem});tick()}
 };
 $("#shotX").onclick=()=>$("#shot").close();
 $("#pwd").onkeydown=e=>{if(e.key==="Enter")$("#go").click()};
-
 async function tick(){try{S=await (await fetch("/api/state")).json();render()}catch(e){}setTimeout(tick,900)}
 tick();
+const nav=performance.getEntriesByType&&performance.getEntriesByType("navigation")[0];
+if(nav&&nav.type==="reload"){
+  fetch("/api/state").then(r=>r.json()).then(st=>{if(st.phase==="done"||st.phase==="error")post("/api/reset")}).catch(()=>{});
+}
 </script>
 </body>
 </html>

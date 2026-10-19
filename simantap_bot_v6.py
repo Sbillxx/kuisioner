@@ -36,23 +36,122 @@ from playwright.async_api import async_playwright, TimeoutError as PWTimeout
 BASE = "https://simantap.unper.ac.id/"
 OUT_DIR = Path("hasil_cek")
 
-RATING_INDEX = -1            # -1 = radio terakhir tiap grup, 0 = radio pertama
-TEXT_JAWABAN = "Sudah baik"  # isi textarea kosong di kuesioner
+# Kredensial default (Isi di sini jika tidak ingin selalu mengetik saat bot dijalankan di terminal)
+DEFAULT_NIM = "2302010036"       # Contoh: "2302010036"
+DEFAULT_PASSWORD = "kth301295"  # Password akun SIMANTAP kamu
+
+TEXT_JAWABAN = "baik"  # isi textarea / isian saran kuesioner
 MAX_KUESIONER_PER_SEMESTER = 30
 MAX_TUNGGU_MAINTENANCE_MENIT = 30
 
-JS_FILL = """
-([idx, teks]) => {
-  const groups = {};
-  document.querySelectorAll('input[type=radio]').forEach(r => {
-    (groups[r.name] = groups[r.name] || []).push(r);
+JS_FILL_KUESIONER = """
+() => {
+  let radiosCount = 0;
+  let buttonsCount = 0;
+  let textareasCount = 0;
+
+  const modal = document.querySelector('.modal.show, .modal-dialog, [role="dialog"], .modal') || document.body;
+
+  function trigger(el) {
+    if (!el) return;
+    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+    el.click();
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  // 1. Textareas (contoh: "Saran untuk perkuliahan", "Saran")
+  const textareas = modal.querySelectorAll('textarea');
+  textareas.forEach(ta => {
+    ta.value = "baik";
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    ta.dispatchEvent(new Event('change', { bubbles: true }));
+    if (window.jQuery) {
+      try { window.jQuery(ta).trigger('input').trigger('change'); } catch(e) {}
+    }
+    textareasCount++;
   });
-  let n = 0;
-  for (const g of Object.values(groups)) { g.at(idx).click(); n++; }
-  document.querySelectorAll('textarea').forEach(t => {
-    if (!t.value) { t.value = teks; t.dispatchEvent(new Event('input', {bubbles: true})); }
+
+  // 2. Radio buttons standar (<input type="radio">)
+  const radios = Array.from(modal.querySelectorAll('input[type="radio"]'));
+  if (radios.length > 0) {
+    const groups = {};
+    radios.forEach(r => {
+      const name = r.name || ('group_' + Math.random());
+      groups[name] = groups[name] || [];
+      groups[name].push(r);
+    });
+
+    for (const name in groups) {
+      const list = groups[name];
+      // Cari radio opsi 3 ("Baik")
+      let target = list.find(r => r.value === "3" || (r.value && r.value.toLowerCase() === "baik"));
+      if (!target) {
+        target = list.find(r => {
+          const lbl = r.closest('label') || document.querySelector(`label[for="${r.id}"]`);
+          const txt = lbl ? (lbl.innerText || '').trim() : '';
+          return txt.includes('Baik') && !txt.includes('Kurang') && !txt.includes('Cukup') && !txt.includes('Sangat');
+        });
+      }
+      if (!target && list.length >= 4) {
+        target = list[2]; // index 2 = opsi ke-3 ("3 Baik")
+      }
+      if (target) {
+        target.checked = true;
+        trigger(target);
+        const parentBtn = target.closest('label, .btn, .btn-group');
+        if (parentBtn) {
+          parentBtn.classList.add('active');
+          trigger(parentBtn);
+        }
+        radiosCount++;
+      }
+    }
+  }
+
+  // 3. Opsi pilihan berupa Button / Label / Div per baris tabel pertanyaan
+  const rows = modal.querySelectorAll('table tbody tr, tr');
+  rows.forEach(tr => {
+    const td = tr.querySelector('td:last-child') || tr;
+    const candidates = Array.from(td.querySelectorAll('button, label, [role="button"], .btn, div[class*="btn"], span[class*="btn"], div, span'));
+
+    let optBaik = candidates.find(el => {
+      const txt = (el.innerText || '').trim();
+      if (txt === 'Baik' || txt === '3 Baik' || txt === '3\\nBaik') return true;
+      return txt.includes('Baik') && !txt.includes('Kurang') && !txt.includes('Cukup') && !txt.includes('Sangat') && txt.length <= 25;
+    });
+
+    if (!optBaik && candidates.length === 4) {
+      optBaik = candidates[2];
+    }
+
+    if (optBaik) {
+      trigger(optBaik);
+      buttonsCount++;
+    }
   });
-  return n;
+
+  // 4. Sapu bersih: tombol/label di dalam modal yang mewakili opsi "3" / "Baik"
+  const allBaik = Array.from(modal.querySelectorAll('button, label, .btn, [role="button"]')).filter(el => {
+    if (el.tagName === 'INPUT') return false;
+    const txt = (el.innerText || '').trim();
+    if (/simpan|batal|tutup/i.test(txt)) return false;
+    return txt === 'Baik' || txt === '3 Baik' || txt === '3\\nBaik' ||
+           (txt.includes('Baik') && !txt.includes('Kurang') && !txt.includes('Cukup') && !txt.includes('Sangat') && txt.length <= 15);
+  });
+  allBaik.forEach(el => {
+    try {
+      trigger(el);
+    } catch(e) {}
+  });
+
+  return {
+    radios: radiosCount,
+    buttons: buttonsCount,
+    textareas: textareasCount,
+    totalBaik: allBaik.length
+  };
 }
 """
 
@@ -67,10 +166,20 @@ JS_SET_SELECT = """
 
 
 # ----------------------------------------------------------------- util umum
-def get_credentials():
-    user = os.environ.get("SIMANTAP_USER") or input("NIM: ").strip()
-    pwd = os.environ.get("SIMANTAP_PASS") or getpass("Password: ")
-    return user.split("@")[0], pwd  # SIMANTAP hanya menerima NIM
+def get_credentials(args=None):
+    user = (
+        (getattr(args, "nim", None) or getattr(args, "user", None))
+        or DEFAULT_NIM
+        or os.environ.get("SIMANTAP_USER")
+        or input("NIM: ").strip()
+    )
+    pwd = (
+        (getattr(args, "pwd", None) or getattr(args, "password", None))
+        or DEFAULT_PASSWORD
+        or os.environ.get("SIMANTAP_PASS")
+        or getpass("Password: ")
+    )
+    return str(user).split("@")[0].strip(), str(pwd)
 
 
 def log(msg):
@@ -344,47 +453,223 @@ async def klasifikasi(page):
                 info[kunci] = m.group(1)
         return "OK", [], info, teks
 
-    # 3) Kuesioner (tampilan lain)
+    # 3) Kuesioner (tampilan tabel kuesioner)
+    btn_kuesioner = await dapatkan_tombol_kuesioner(page)
+    jml_tombol = await btn_kuesioner.count()
+
+    # Hitung jumlah baris mata kuliah pada tabel kuesioner
+    kuesioner_tbl = page.locator('table').filter(
+        has=page.locator('th, td', has_text=re.compile(r"matakuliah|dosen|jenis", re.I))
+    ).first
+
+    jml_mk = 0
+    if await kuesioner_tbl.count() > 0:
+        baris_mk = kuesioner_tbl.locator('tbody tr').filter(
+            has=page.locator('button, a').filter(has_text=re.compile(r"teori|praktik", re.I))
+        )
+        jml_mk = await baris_mk.count()
+        if jml_mk == 0:
+            jml_mk = await kuesioner_tbl.locator('tbody tr').count()
+    if jml_mk == 0:
+        jml_mk = jml_tombol
+
     baris_k = [b.strip() for b in teks.splitlines() if re.search(r"kue?isioner", b, re.I)]
-    if baris_k or await locator_kuesioner(page).count() > 0:
-        return "BELUM ISI KUESIONER", baris_k[:5], info, teks
+    if jml_tombol > 0 or baris_k:
+        if jml_mk > 0:
+            if jml_mk == jml_tombol:
+                alasan = [f"Ada {jml_mk} kuesioner yang harus diisi"]
+            else:
+                alasan = [f"Ada {jml_mk} mata kuliah ({jml_tombol} kuesioner Teori/Praktikum) yang harus diisi"]
+        else:
+            alasan = baris_k[:5] if baris_k else ["Kuesioner belum diisi"]
+        return "BELUM ISI KUESIONER", alasan, info, teks
 
     # 4) Tidak dikenali
     potongan = [b.strip() for b in teks.splitlines() if b.strip()][8:16]
     return "TIDAK DIKENALI", potongan, info, teks
 
 
+async def dapatkan_tombol_kuesioner(page):
+    """Mencari semua tombol kuesioner ('Teori' / 'Praktikum') di tabel Kuesioner SIMANTAP."""
+    # Beri jeda kecil agar Vue selesai me-render seluruh baris tabel
+    try:
+        await page.wait_for_selector('table tbody tr td, .table tbody tr td', timeout=3000)
+    except Exception:
+        pass
+    await page.wait_for_timeout(400)
+
+    # 1. Cari di dalam tabel kuesioner (prioritas utama)
+    kuesioner_tbl = page.locator('table').filter(
+        has=page.locator('th, td', has_text=re.compile(r"matakuliah|dosen|jenis", re.I))
+    ).first
+    if await kuesioner_tbl.count() > 0:
+        tbl_btn = kuesioner_tbl.locator('button, a.btn, a').filter(
+            has_text=re.compile(r"^\s*(?:teori|praktik|praktikum)\s*$", re.I)
+        )
+        if await tbl_btn.count() > 0:
+            return tbl_btn
+
+    # 2. Cari tombol/link yang teksnya persis 'Teori' atau 'Praktik' / 'Praktikum' di luar modal
+    exact_btn = page.locator('button, a.btn, a').filter(
+        has_text=re.compile(r"^\s*(?:teori|praktik|praktikum|isi kuesioner)\s*$", re.I)
+    )
+    if await exact_btn.count() > 0:
+        return exact_btn
+
+    return page.locator('button, a').filter(has_text=re.compile(r"kue?isioner", re.I))
+
+
 def locator_kuesioner(page):
-    return page.locator("a, button").filter(has_text=re.compile(r"kue?isioner", re.I))
+    """Alias kompatibilitas untuk locator tombol kuesioner."""
+    return page.locator(
+        'table tr td:last-child button, table tr td:last-child a, '
+        'button:has-text("Teori"), a:has-text("Teori")'
+    )
 
 
-async def isi_kuesioner(page, auto):
-    if await locator_kuesioner(page).count() == 0:
-        log("      Tombol/link kuesioner tidak ditemukan di halaman ini.")
-        return False
-    await locator_kuesioner(page).first.click()
-    await page.wait_for_load_state("domcontentloaded")
-    await page.wait_for_timeout(1500)
+async def isi_kuesioner(page, auto=True):
+    """
+    Mengisi form kuesioner evaluasi dosen/perkuliahan:
+    1. Klik tombol 'Teori' di baris kuesioner pertama jika modal belum terbuka.
+    2. Tunggu modal 'Form Kuesioner' terbuka.
+    3. Pilih opsi '3' ('Baik') untuk semua pertanyaan pilihan ganda.
+    4. Isi semua isian esai / saran / textarea dengan 'baik'.
+    5. Klik tombol 'Simpan Kuesioner'.
+    6. Tunggu dialog konfirmasi & modal tertutup.
+    """
+    modal_box = page.locator('.modal.show, .modal:visible, [role="dialog"]:visible, div.modal').first
+    modal_heading = page.get_by_text("Form Kuesioner").or_(page.get_by_text("Semua Kuesioner Wajib Diisi"))
 
-    jumlah = await page.evaluate(JS_FILL, [RATING_INDEX, TEXT_JAWABAN])
-    log(f"      {jumlah} pertanyaan (radio) terisi.")
-    if jumlah == 0:
-        log("      Tidak ada radio button; form mungkin beda. Lewati.")
-        return False
+    # Cek apakah modal sudah terbuka
+    is_open = False
+    try:
+        if await modal_heading.count() > 0 and await modal_heading.first.is_visible():
+            is_open = True
+        elif await modal_box.count() > 0 and await modal_box.is_visible():
+            is_open = True
+    except Exception:
+        pass
+
+    # Jika modal belum terbuka, klik tombol Teori pertama di tabel
+    if not is_open:
+        tombols = await dapatkan_tombol_kuesioner(page)
+        if await tombols.count() == 0:
+            log("      Tombol kuesioner (Teori) tidak ditemukan di halaman ini.")
+            return False
+        btn = tombols.first
+        await btn.scroll_into_view_if_needed()
+        try:
+            await btn.click(timeout=5000)
+        except Exception:
+            await btn.click(force=True)
+        log("      Membuka Form Kuesioner...")
+
+    try:
+        await modal_heading.first.wait_for(state="visible", timeout=15000)
+        log("      Form Kuesioner berhasil terbuka.")
+    except Exception:
+        if await modal_box.count() > 0 and await modal_box.is_visible():
+            log("      Modal kuesioner terdeteksi terbuka.")
+        else:
+            log("      Modal Form Kuesioner tidak terbuka dalam batas waktu.")
+            return False
+
+    await page.wait_for_timeout(1000)
+
+    # 1. Isi semua pilihan opsi 'Baik' dan textarea 'baik' via JS
+    hasil_fill = await page.evaluate(JS_FILL_KUESIONER)
+    log(f"      Pilihan opsi 'Baik' dan saran terisi: {hasil_fill}")
+    await page.wait_for_timeout(500)
+
+    # 2. Playwright native fallback: klik semua tombol opsi '3' / 'Baik' langsung
+    modal_scope = modal_box if await modal_box.count() > 0 else page
+    baik_btns = modal_scope.locator('button, label, .btn, [role="button"], div, span').filter(
+        has_text=re.compile(r"^\s*(?:3\s+)?Baik\s*$", re.I)
+    )
+    count_baik = await baik_btns.count()
+    if count_baik > 0:
+        for i in range(count_baik):
+            try:
+                await baik_btns.nth(i).click(force=True, timeout=800)
+            except Exception:
+                pass
+
+    # 3. Pastikan semua textarea benar-benar terisi teks 'baik'
+    tas = page.locator('.modal textarea, textarea')
+    ta_count = await tas.count()
+    for i in range(ta_count):
+        try:
+            t = tas.nth(i)
+            val = await t.input_value()
+            if not val or val.strip() == "":
+                await t.fill("baik")
+        except Exception:
+            pass
 
     if not auto:
         jawab = await asyncio.to_thread(
-            input, "      Cek form di browser. Enter = kirim, ketik n = batal: "
+            input, "      Periksa form di browser. Tekan Enter untuk simpan, atau ketik n lalu Enter untuk batal: "
         )
         if jawab.strip().lower() == "n":
+            log("      Pengisian dibatalkan pengguna.")
+            try:
+                await page.locator('button:has-text("Batal"), .modal .close, button.close').first.click()
+            except Exception:
+                pass
             return False
 
-    await page.locator(
-        'button[type="submit"], input[type="submit"], '
-        'button:has-text("Simpan"), button:has-text("Kirim")'
-    ).first.click()
-    await page.wait_for_load_state("domcontentloaded")
-    await page.wait_for_timeout(1500)
+    # Scroll modal ke paling bawah agar tombol 'Simpan Kuesioner' terlihat
+    await page.evaluate("""() => {
+        const m = document.querySelector('.modal.show, .modal, [role="dialog"]') || document.body;
+        m.scrollTop = m.scrollHeight;
+        window.scrollTo(0, document.body.scrollHeight);
+    }""")
+    await page.wait_for_timeout(600)
+
+    btn_simpan = page.locator(
+        'button:has-text("Simpan Kuesioner"), '
+        'a:has-text("Simpan Kuesioner"), '
+        'button:has-text("Simpan"), '
+        'input[value*="Simpan"]'
+    ).first
+
+    try:
+        await btn_simpan.wait_for(state="visible", timeout=8000)
+        await btn_simpan.scroll_into_view_if_needed()
+        try:
+            await btn_simpan.click(timeout=3000)
+        except Exception:
+            await btn_simpan.click(force=True)
+        log("      Tombol 'Simpan Kuesioner' diklik.")
+    except Exception as e:
+        log(f"      Gagal mengklik tombol Simpan Kuesioner: {e}")
+        return False
+
+    # Tangani popup konfirmasi SweetAlert jika ada
+    await page.wait_for_timeout(1000)
+    swal = page.locator(
+        '.swal2-confirm, '
+        'button:has-text("Ya, Simpan"), '
+        'button:has-text("Ya, Yakin"), '
+        'button:has-text("Ya"), '
+        'button:has-text("OK")'
+    ).first
+    if await swal.count() > 0:
+        try:
+            if await swal.is_visible():
+                await swal.click()
+                log("      Konfirmasi SweetAlert diklik.")
+        except Exception:
+            pass
+
+    # Tunggu modal tertutup
+    try:
+        await modal_heading.first.wait_for(state="hidden", timeout=15000)
+        log("      Modal kuesioner berhasil ditutup & disimpan.")
+    except Exception:
+        pass
+
+    await page.wait_for_timeout(2000)
     return True
 
 
@@ -428,14 +713,27 @@ async def proses_semester(page, opt, args):
     status, alasan, info, teks = await klasifikasi(page)
 
     if "KUESIONER" in status and args.isi:
-        for _ in range(MAX_KUESIONER_PER_SEMESTER):
-            if not await isi_kuesioner(page, args.auto):
+        log(f"      Mendeteksi kuesioner yang harus diisi untuk {opt['text']}...")
+        for no in range(1, MAX_KUESIONER_PER_SEMESTER + 1):
+            tombols = await dapatkan_tombol_kuesioner(page)
+            sisa = await tombols.count()
+            if sisa == 0:
+                log("      Semua kuesioner pada tabel telah selesai diisi!")
                 break
-            await buka_halaman_nilai(page)
+            log(f"      [{no}] Mengisi kuesioner (sisa {sisa} kuesioner)...")
+            sukses = await isi_kuesioner(page, args.auto)
+            if not sukses:
+                log("      Pengisian kuesioner dihentikan atau tidak berhasil.")
+                break
+            await page.wait_for_timeout(2000)
+
+        # Setelah semua kuesioner selesai diisi, perbarui data nilai
+        log("      Memperbarui data nilai setelah pengisian kuesioner...")
+        await page.wait_for_timeout(1500)
+        status, alasan, info, teks = await klasifikasi(page)
+        if "KUESIONER" in status:
             await pilih_semester(page, opt)
             status, alasan, info, teks = await klasifikasi(page)
-            if "KUESIONER" not in status:
-                break
 
     OUT_DIR.mkdir(exist_ok=True)
     nama = re.sub(r"[^\w]+", "_", opt["text"]).strip("_")
@@ -456,7 +754,7 @@ def ringkas_info(info):
 
 
 async def run_bot(args):
-    user, pwd = get_credentials()
+    user, pwd = get_credentials(args)
     log("=== Memulai Bot SIMANTAP v6 ===")
 
     async with async_playwright() as p:
@@ -464,6 +762,7 @@ async def run_bot(args):
         context = await browser.new_context(no_viewport=True)
         page = await context.new_page()
         page.set_default_timeout(20000)
+        page.on("dialog", lambda d: asyncio.create_task(d.accept()))
 
         try:
             await login(page, user, pwd)
@@ -514,11 +813,15 @@ async def run_bot(args):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Bot cek nilai/kuesioner SIMANTAP")
+    ap.add_argument("--nim", "--user", help='NIM untuk login SIMANTAP (contoh: "2302010036")')
+    ap.add_argument("--pwd", "--pass", help="Password untuk login SIMANTAP")
     ap.add_argument("--semester", action="append",
                     help='semester tertentu, contoh: "2025/2026 Genap" (boleh diulang)')
     ap.add_argument("--pilih", action="store_true", help="tampilkan menu untuk memilih semester")
-    ap.add_argument("--isi", action="store_true", help="isi kuesioner yang belum diisi")
-    ap.add_argument("--auto", action="store_true", help="kirim kuesioner tanpa konfirmasi")
+    ap.add_argument("--isi", action="store_true", default=True, help="isi kuesioner yang belum diisi (default: aktif)")
+    ap.add_argument("--no-isi", action="store_false", dest="isi", help="jangan isi kuesioner otomatis")
+    ap.add_argument("--auto", action="store_true", default=True, help="kirim kuesioner tanpa konfirmasi (default: aktif)")
+    ap.add_argument("--konfirmasi", action="store_false", dest="auto", help="minta konfirmasi sebelum simpan kuesioner")
     try:
         asyncio.run(run_bot(ap.parse_args()))
     except KeyboardInterrupt:
